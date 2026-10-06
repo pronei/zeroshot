@@ -202,6 +202,46 @@ fn find_executable_is_none_without_a_match_or_a_search_path() {
     assert_eq!(find_executable("harness", &BTreeMap::new()), None);
 }
 
+#[cfg(unix)]
+#[test]
+fn find_executable_follows_a_symlink_and_skips_a_dangling_one() {
+    use std::collections::BTreeMap;
+
+    // Package managers install harnesses as links into their own trees. The OS search runs a
+    // link's target and moves past a link whose target is gone.
+    let root = TemporaryDirectory::for_test("find-executable-symlink");
+    let [store, dangling, linked] = ["store", "dangling", "linked"].map(|name| root.path(name));
+    for path in [&store, &dangling, &linked] {
+        fs::create_dir(path).unwrap();
+    }
+    let target = store.join("cli.js");
+    openengine_cluster_testkit::fixture::write_executable(&target, "#!/bin/sh\n", 0o755).unwrap();
+    std::os::unix::fs::symlink(store.join("removed"), dangling.join("harness")).unwrap();
+    std::os::unix::fs::symlink(&target, linked.join("harness")).unwrap();
+    let search_path = std::env::join_paths([&dangling, &linked]).unwrap();
+    let environment = BTreeMap::from([("PATH".to_owned(), search_path.into_string().unwrap())]);
+
+    assert_eq!(
+        find_executable("harness", &environment),
+        Some(linked.join("harness"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn search_directories_skip_empty_path_entries() {
+    use std::path::PathBuf;
+
+    let directories = |path: &str| search_directories(path).collect::<Vec<_>>();
+
+    assert_eq!(directories(""), Vec::<PathBuf>::new());
+    assert_eq!(directories(":"), Vec::<PathBuf>::new());
+    assert_eq!(
+        directories("/first::/second:"),
+        [PathBuf::from("/first"), PathBuf::from("/second")]
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_find_executable_tries_only_the_fixed_suffixes() {

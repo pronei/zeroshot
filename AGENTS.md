@@ -71,8 +71,9 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   store a lane-bearing plan on a target without that exact marker kind, after discovery and before
   acquiring an access token, so no request body is sent; an absent or different marker never fails
   discovery. Local `run`/`resume` and `zeroshot acp` check every lane's executable on the captured
-  search path before launch with `find_executable`, the lookup process spawning uses, report a
-  missing one as a usage error, and never probe login state.
+  search path before launch, report a missing one as a usage error, and never probe login state.
+  The lookup is `find_executable`: Windows spawning uses it directly, and elsewhere it follows the
+  OS search that spawning relies on.
 - The `gateway` provider resolves `GATEWAY_BASE_URL` and `GATEWAY_API_KEY` through named
   connections. Codex uses Responses with bearer authentication; Claude uses Messages with
   `x-api-key`. Preserve caller-owned base paths and model identifiers without protocol detection.

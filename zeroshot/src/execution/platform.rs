@@ -157,11 +157,16 @@ pub(crate) fn find_executable(
             let candidate = std::path::PathBuf::from(program);
             return runnable(&candidate).then_some(candidate);
         }
-        // An empty entry is a legacy spelling of the working directory. Skipping it keeps an empty
-        // `PATH` from matching files in whatever directory this process happens to run in.
-        std::env::split_paths(environment.get("PATH")?)
-            .filter(|directory| !directory.as_os_str().is_empty())
+        search_directories(environment.get("PATH")?)
             .map(|directory| directory.join(program))
             .find(|candidate| runnable(candidate))
     }
+}
+
+/// The directories [`find_executable`] searches for a bare name: each nonempty entry of `path`, in
+/// order. An empty entry is a legacy spelling of the working directory. Skipping it keeps an empty
+/// `PATH` from matching files in whatever directory this process happens to run in.
+#[cfg(not(windows))]
+fn search_directories(path: &str) -> impl Iterator<Item = std::path::PathBuf> + '_ {
+    std::env::split_paths(path).filter(|directory| !directory.as_os_str().is_empty())
 }

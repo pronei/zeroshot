@@ -445,9 +445,9 @@ pub(crate) fn local_search_path(environment: &LocalHarnessEnvironment) -> String
 
 /// Checks that every lane of `runtime` finds its harness executable on the search path its adapter
 /// spawns with: the captured `PATH`, else the platform default. The lookup is
-/// `crate::execution::platform::find_executable`, the resolution process spawning uses. Lanes are
-/// checked in lane order and the first missing executable fails. Login state is never probed.
-/// Callers run this before they create any run state.
+/// `crate::execution::platform::find_executable`, which follows the search process spawning
+/// performs. Lanes are checked in lane order and the first missing executable fails. Login state
+/// is never probed. Callers run this before they create any run state.
 pub(crate) fn check_lane_executables(
     runtime: &RuntimePlan,
     native_environment: &BTreeMap<String, String>,

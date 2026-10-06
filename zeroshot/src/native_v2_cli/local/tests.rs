@@ -371,7 +371,15 @@ fn local_recovery_contract_preserves_lineage_and_recoverability() {
 #[tokio::test]
 async fn missing_lane_executable_is_a_usage_error_before_any_run_state() {
     let root = TestDirectory::new("lane-preflight");
-    let backend = contract_backend(root.path());
+    // No controller can start: if the preflight stops failing, the launch fails fast instead of
+    // running an installed `zeroshot`.
+    let backend = LocalCliBackend::new(
+        root.path().to_owned(),
+        root.child("missing-controller"),
+        root.path().to_owned(),
+        PathBuf::from("git"),
+    )
+    .with_ready_timeout(Duration::ZERO);
     let workspace = root.child("workspace");
     let empty_bin = root.child("bin");
     for directory in [&workspace, &empty_bin] {
