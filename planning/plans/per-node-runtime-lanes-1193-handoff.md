@@ -1,8 +1,9 @@
 # Handoff: implement per-node runtime lanes, issue 1193
 
-Status: spec approved on 2026-10-05 (`planning/plans/per-node-runtime-lanes-1193.md`). No
-implementation plan exists and no code has changed. This document carries the code survey done
-while designing the spec so the implementing session does not repeat it.
+Status: spec approved on 2026-10-05 (`planning/plans/per-node-runtime-lanes-1193.md`). The core
+pull request implements phases 0 to 5 and the UI pull request implements phase 6. This document
+keeps the code survey done while designing the spec; its line references describe the code before
+the change.
 
 Authority: the spec above, then `AGENTS.md`, then `CLAUDE.md`. Where this document and the spec
 disagree, the spec wins.

@@ -11,10 +11,12 @@ the run.
 
 Local execution is the only mode that mutates the caller's existing worktree; each selected
 installed harness runs as the current user. A plan with
-[per-node lanes](../reference/runtime-plan.md#per-node-lanes) needs every lane's CLI installed and
-signed in. Before the controller starts, `zeroshot run` and `zeroshot resume` check that each lane's
-executable is on `PATH`; they do not check login state, so a missing login fails at that lane's
-first turn.
+[per-node lanes](../reference/runtime-plan.md#per-node-lanes) needs every lane's CLI installed. The
+native `codex`/`openai`, `claude`/`anthropic`, and `copilot`/`github` lanes also need that CLI
+signed in; other lanes need their provider's
+[connection values](../reference/runtime-plan.md#connections). Before the controller starts,
+`zeroshot run` and `zeroshot resume` check that each lane's executable is on `PATH`; they do not
+check login state, so a missing login fails at that lane's first turn.
 
 Local Codex runs with `provider: "openai"` use the model provider and transport configured in the
 user's Codex configuration, including OpenAI-compatible proxies such as LiteLLM. Zeroshot supplies

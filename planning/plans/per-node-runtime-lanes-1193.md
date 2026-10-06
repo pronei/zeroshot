@@ -1,7 +1,8 @@
 # Per-node harness and provider lanes, issue 1193
 
-Status: design approved in conversation on 2026-10-05. Spec awaiting user review before an
-implementation plan is written.
+Status: approved on 2026-10-05. Pull request 1 in [Delivery shape](#delivery-shape) implements the
+core and pull request 2 the UI. Sections corrected during implementation describe the code as
+built.
 
 Authority: [zeroshot issue 1193](https://github.com/the-open-engine/zeroshot/issues/1193),
 "Choose the harness and provider per node in a RuntimePlan". Decisions recorded in
@@ -237,10 +238,12 @@ lane is consistent per node, so the downcast always matches.
 ### Local root (`zeroshot/src/native_v2_local.rs`)
 
 `local_harness` becomes `local_lanes` and returns `Vec<NativeV2HarnessConfig>`. It computes the
-shared inputs once (native environment snapshot, search path, user home, process pool, local
-Claude environment) into a request struct, then builds one config per lane in
-`admitted.runtime.lanes()`. The per-lane builder keeps today's three bodies unchanged. The
-four-parameter Clippy ceiling is respected through the request struct.
+shared inputs once (native environment snapshot, local command environment, search path, user
+home, process pool) into a request struct, then builds one config per lane in
+`admitted.runtime.lanes()`. The per-lane builder keeps today's three bodies unchanged, so each
+Claude lane builds its own process environment from the shared search path and snapshot, and a
+plan without a Claude lane never builds one. The four-parameter Clippy ceiling is respected
+through the request struct.
 
 ### Hosted root (`zeroshot/src/native_v2_hosting/allocator.rs`)
 
@@ -327,7 +330,9 @@ lanes unchanged. The UI can land after the core.
   access is derived per node from its effective lane.
 - `docs/concepts/runtimes-and-connections.md`: materialization and local native login are per
   lane.
-- `docs/concepts/targets.md`: a local run needs every lane's CLI installed and logged in.
+- `docs/concepts/targets.md`: a local run needs every lane's CLI installed, signed in for the
+  native `codex`/`openai`, `claude`/`anthropic`, and `copilot`/`github` lanes; other lanes need
+  their provider's connection values.
 - `docs/guides/review-loop.md`: a short cross-vendor variant, with its runtime JSON added under
   `docs/assets/review-loop/`.
 - `docs/guides/python-sdk.md`: one line that an opaque `RuntimePlan` may carry per-node lanes.
@@ -393,4 +398,5 @@ title and a `## Summary`:
 2. `feat(ui): edit per-node harness and provider lanes`: domain, inspector, runtime editor,
    history view, tests.
 
-The implementation plan is written after this spec is approved.
+The implementation followed the handoff in `planning/plans/per-node-runtime-lanes-1193-handoff.md`,
+which carries the code survey behind this spec.

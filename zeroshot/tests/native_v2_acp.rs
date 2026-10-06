@@ -155,6 +155,31 @@ async fn active_turn_interruption_is_terminal_and_bounded() {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn startup_checks_lane_executables_after_the_profile_gate() {
+    for (lane, error) in [
+        (
+            json!({"harness":"claude","provider":"anthropic"}),
+            "lane claude/anthropic needs the `claude` executable on PATH",
+        ),
+        // The profile gate runs first, so an ineligible lane never reaches the executable check.
+        (
+            json!({"harness":"copilot","provider":"github"}),
+            "ACP profile is not eligible: only Codex and Claude lanes are supported",
+        ),
+    ] {
+        let fixture = AcpFixture::new();
+        fixture.install_profile_with_worker_lane(Some(lane));
+        let output = fixture.start_with_fixture_path_only().await;
+
+        assert!(!output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            format!("zeroshot: {error}\n")
+        );
+    }
+}
+
 #[cfg(feature = "ui")]
 #[tokio::test(flavor = "current_thread")]
 async fn active_acp_turn_streams_through_the_workspace_ui() {
@@ -282,7 +307,12 @@ impl AcpFixture {
     }
 
     fn install_profile(&self) {
-        let (graph, runtime) = write_profile_files(self._root.path());
+        self.install_profile_with_worker_lane(None);
+    }
+
+    /// Installs the `acp-test` profile, moving its `worker` binding to `lane` when one is given.
+    fn install_profile_with_worker_lane(&self, lane: Option<Value>) {
+        let (graph, runtime) = write_profile_files(self._root.path(), lane);
         let profile = Command::new(&self.executable)
             .args([
                 "profile",
@@ -320,6 +350,25 @@ impl AcpFixture {
     fn spawn_stalled_server(&self) -> tokio::process::Child {
         std::fs::write(self._root.path().join("provider-gate-enabled"), []).unwrap();
         self.spawn_server()
+    }
+
+    /// Starts the server with only the fixture `bin` directory, which holds just the fake `codex`,
+    /// on `PATH`, and waits for it to exit. Stdin is closed, so a server that passes its startup
+    /// checks reads end of file and exits successfully.
+    async fn start_with_fixture_path_only(&self) -> std::process::Output {
+        let mut command = tokio::process::Command::new(&self.executable);
+        command
+            .args(["acp", "--profile", "local:acp-test"])
+            .current_dir(&self.workspace)
+            .envs(self.environment())
+            .env("PATH", self._root.path().join("bin"))
+            .env_remove("ZEROSHOT_ERROR_FORMAT")
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        tokio::time::timeout(Duration::from_secs(30), command.output())
+            .await
+            .expect("ACP server did not exit after its startup checks")
+            .unwrap()
     }
 
     #[cfg(feature = "ui")]
@@ -643,7 +692,7 @@ fi
     openengine_cluster_testkit::fixture::write_executable(&executable, script, 0o755).unwrap();
 }
 
-fn write_profile_files(root: &Path) -> (PathBuf, PathBuf) {
+fn write_profile_files(root: &Path, worker_lane: Option<Value>) -> (PathBuf, PathBuf) {
     let string = || json!({"kind":"string"});
     let field = || json!({"type":string(),"required":true});
     let state = json!({"kind":"record","fields":{
@@ -684,7 +733,7 @@ fn write_profile_files(root: &Path) -> (PathBuf, PathBuf) {
             "promotedStatePaths":[]
         }
     });
-    let runtime = json!({
+    let mut runtime = json!({
         "harness":"codex",
         "provider":"openai",
         "size":"medium",
@@ -694,6 +743,9 @@ fn write_profile_files(root: &Path) -> (PathBuf, PathBuf) {
             "sessionScope":"node_instance"
         }}
     });
+    if let Some(lane) = worker_lane {
+        runtime["nodes"]["worker"]["lane"] = lane;
+    }
     let graph_path = root.join("graph.json");
     let runtime_path = root.join("runtime.json");
     std::fs::write(&graph_path, serde_json::to_vec(&graph).unwrap()).unwrap();
