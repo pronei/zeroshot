@@ -100,8 +100,9 @@ pub(crate) fn executable(
     }
 }
 
-/// The file that spawning `program` with the child environment `environment` runs, or `None`
-/// when there is none. A preflight uses it to check what process spawning will run.
+/// The file that spawning `program` with the child environment `environment` resolves to, or
+/// `None` when there is none: exactly the spawned file on Windows, and elsewhere a lookup that
+/// follows the OS search spawning relies on. A preflight uses it before spawning anything.
 ///
 /// On Windows, [`executable`] spawns exactly this result. A name with a directory is checked
 /// where it points, and a bare name in each directory of `PATH`. A name without an extension is

@@ -308,8 +308,9 @@ Preflight:
 - The lookup is not a separate local helper. Every harness process is spawned by
   `build_child_command`, which resolves the program with
   `crate::execution::platform::executable(program, child_environment)`. That module gains
-  `pub(crate) fn find_executable(program, &BTreeMap<String, String>) -> Option<PathBuf>`, the
-  lookup spawning uses. On Windows it is the loop `executable` already ran: a bare name is tried
+  `pub(crate) fn find_executable(program, &BTreeMap<String, String>) -> Option<PathBuf>`, which
+  Windows spawning uses directly and which elsewhere follows the OS search spawning relies on. On
+  Windows it is the loop `executable` already ran: a bare name is tried
   only with the fixed suffixes `.exe`, `.com`, `.cmd`, and `.bat`, in that order, in each `PATH`
   directory, and the first file wins; `PATHEXT` is ignored and an extensionless file never
   matches. `executable` becomes `find_executable(..).unwrap_or_else(|| program.into())` there, so
