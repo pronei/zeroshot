@@ -69,23 +69,31 @@ test('an agent node runs on its own lane, else the run-level pair; delivery node
 });
 
 test('a new run-level harness clears the provider and every lane; other fields stay', () => {
-  // Two lanes on different harnesses: each new harness matches one lane and crosses the other.
-  const document = fixture();
-  document.runtime.nodes.worker.lane = { harness: 'copilot', provider: 'github' };
-  const before = structuredClone(document);
-  const withoutAnyLane = structuredClone(before.runtime.nodes);
-  for (const binding of Object.values(withoutAnyLane)) delete binding.lane;
-  for (const harness of ['claude', 'copilot']) {
-    const next = setRuntimeField(document, 'harness', harness);
-    assert.equal(next.runtime.harness, harness);
-    assert.equal(next.runtime.provider, '');
-    for (const name of ['worker', 'reviewer', 'deliver']) assert.equal(hasLane(next, name), false);
-    assert.deepEqual(next.runtime.nodes, withoutAnyLane);
-    assertDocument(next);
+  // The reviewer lane is on Claude Code. A Copilot worker lane is matched by one new harness and
+  // crossed by the other. A Codex worker lane overrides only the provider of the old run-level
+  // harness, and a new harness must clear it too.
+  for (const workerLane of [
+    { harness: 'copilot', provider: 'github' },
+    { harness: 'codex', provider: 'openrouter' },
+  ]) {
+    const document = fixture();
+    document.runtime.nodes.worker.lane = workerLane;
+    const before = structuredClone(document);
+    const withoutAnyLane = structuredClone(before.runtime.nodes);
+    for (const binding of Object.values(withoutAnyLane)) delete binding.lane;
+    for (const harness of ['claude', 'copilot']) {
+      const next = setRuntimeField(document, 'harness', harness);
+      assert.equal(next.runtime.harness, harness);
+      assert.equal(next.runtime.provider, '');
+      for (const name of ['worker', 'reviewer', 'deliver'])
+        assert.equal(hasLane(next, name), false);
+      assert.deepEqual(next.runtime.nodes, withoutAnyLane);
+      assertDocument(next);
+    }
+    assert.deepEqual(document, before);
+    // Choosing the current harness again is not a change.
+    assert.deepEqual(setRuntimeField(document, 'harness', 'codex'), document);
   }
-  assert.deepEqual(document, before);
-  // Choosing the current harness again is not a change.
-  assert.deepEqual(setRuntimeField(document, 'harness', 'codex'), document);
 });
 
 test('run-level provider and size changes keep every lane', () => {
