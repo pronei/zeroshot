@@ -1,12 +1,12 @@
 use openengine_cluster_protocol::{
     RunProfile, RunProfileDefaultRequest, RunProfileDefaultResult, RunProfileDeleteResult,
     RunProfileListRequest, RunProfileListResult, RunProfileMutationResult, RunProfileRunRequest,
-    RunProfileSelector, RunProfileSetRequest, RunSubmitResult,
+    RunProfileSelector, RunProfileSetRequest, RunSubmitResult, RuntimePlan,
 };
 use reqwest::header::{ACCEPT, CACHE_CONTROL};
 
 use super::contract::{RunProfilesDescriptor, authority_error};
-use super::TargetHttpControlAuthority;
+use super::{TargetHttpControlAuthority, require_node_runtime_lanes};
 use super::access::AccessToken;
 use crate::native_v2_target::{TargetAccess, TargetAuthorityError, TargetRecord};
 
@@ -43,10 +43,34 @@ impl ProfileOperation {
     }
 }
 
+/// The JSON body of one profile route.
+trait ProfileBody: serde::Serialize + Sync {
+    /// The plan this body stores on the target. Only a set stores one; running a stored profile
+    /// sends no plan because the target already holds it.
+    fn stored_runtime(&self) -> Option<&RuntimePlan> {
+        None
+    }
+}
+
+impl ProfileBody for RunProfileListRequest {}
+impl ProfileBody for RunProfileSelector {}
+impl ProfileBody for RunProfileDefaultRequest {}
+impl ProfileBody for RunProfileRunRequest {}
+
+impl ProfileBody for RunProfileSetRequest {
+    fn stored_runtime(&self) -> Option<&RuntimePlan> {
+        Some(&self.runtime)
+    }
+}
+
 impl TargetHttpControlAuthority {
+    /// Resolves the profile routes and an access token. A plan to be stored is checked against the
+    /// target's per-node lane support after discovery and before the token, so a refused plan
+    /// sends no request body: no token exchange and no profile POST.
     async fn profile_access(
         &self,
         target: &TargetRecord,
+        stored_runtime: Option<&RuntimePlan>,
     ) -> Result<(RunProfilesDescriptor, AccessToken), TargetAuthorityError> {
         if matches!(target.access, TargetAccess::Direct) {
             return Err(authority_error(
@@ -57,6 +81,9 @@ impl TargetHttpControlAuthority {
         let routes = auth.run_profiles.clone().ok_or_else(|| {
             authority_error("hosted target does not advertise profile management")
         })?;
+        if let Some(runtime) = stored_runtime {
+            require_node_runtime_lanes(&controller, runtime)?;
+        }
         let access = self
             .access_token(target, &auth, &controller.audience)
             .await?;
@@ -70,10 +97,10 @@ impl TargetHttpControlAuthority {
         input: &I,
     ) -> Result<O, TargetAuthorityError>
     where
-        I: serde::Serialize + Sync,
+        I: ProfileBody,
         O: serde::de::DeserializeOwned,
     {
-        let (routes, access) = self.profile_access(target).await?;
+        let (routes, access) = self.profile_access(target, input.stored_runtime()).await?;
         let url = operation.route(&routes).clone();
         let builder = self
             .authorized(self.client.post(url.clone()), &access)?

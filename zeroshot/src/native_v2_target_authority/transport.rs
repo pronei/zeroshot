@@ -405,7 +405,10 @@ impl NativeV2TargetServer {
     }
 
     fn discovery_document(&self) -> TargetDiscoveryDocument {
-        let mut document = TargetDiscoveryDocument::direct(self.access.authentication());
+        // Admission and composition in this binary accept per-node lanes in every access mode, so
+        // unlike workspace recovery the marker does not depend on the access mode or the factory.
+        let mut document =
+            TargetDiscoveryDocument::direct(self.access.authentication()).with_node_runtime_lanes();
         if self.workspace_recovery() {
             document = document.with_workspace_recovery();
         }
