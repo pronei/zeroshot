@@ -33,7 +33,7 @@ use crate::native_v2_cloud::{
     RetainedAllocationUnavailable,
 };
 use crate::native_v2_codex::NativeV2CodexConfig;
-use crate::native_v2_contract::{AdmittedRun, RuntimePlan};
+use crate::native_v2_contract::{AdmittedRun, RuntimeLane};
 use crate::native_v2_delivery::{
     DeliveryLineage, GhCliAuthorityConfig, GhCliDeliveryAuthority, NativeV2DeliveryConfig,
 };
@@ -394,7 +394,7 @@ impl ProductionCapsuleAllocator {
         let candidate = build_native_v2_candidate(
             request.admitted,
             NativeV2CandidateConfig {
-                harness: self.harness(request.admitted, &filesystem, active_process_pool)?,
+                lanes: self.lanes(request.admitted, &filesystem, active_process_pool)?,
                 delivery: NativeV2DeliveryConfig::for_hosted_workspace(
                     DeliveryLineage::new(
                         delivery_run_id.clone(),
@@ -653,25 +653,53 @@ impl ProductionCapsuleAllocator {
         Ok(identity)
     }
 
-    fn harness(
+    /// One harness configuration per distinct effective lane of the admitted plan.
+    fn lanes(
         &self,
         admitted: &AdmittedRun,
         filesystem: &CapsuleFilesystem,
         process_pool: HostedProcessPool,
-    ) -> Result<NativeV2HarnessConfig, CapsuleAllocationUnavailable> {
+    ) -> Result<Vec<NativeV2HarnessConfig>, CapsuleAllocationUnavailable> {
         let run_root = filesystem
             .workspace
             .parent()
             .ok_or(CapsuleAllocationUnavailable::Runtime)?;
         let search_path = environment::search_path(run_root, &self.config.executable_search_path);
-        let base_environment = BTreeMap::from([(
-            "ZEROSHOT_TOOLS".to_owned(),
-            environment::tools_directory(run_root)
-                .to_string_lossy()
-                .into_owned(),
-        )]);
-        match &admitted.runtime {
-            RuntimePlan::Copilot { .. } => Ok(NativeV2HarnessConfig::Copilot(
+        let tools_directory = environment::tools_directory(run_root)
+            .to_string_lossy()
+            .into_owned();
+        let base_environment =
+            BTreeMap::from([("ZEROSHOT_TOOLS".to_owned(), tools_directory.clone())]);
+        let inputs = HostedLaneInputs {
+            filesystem,
+            search_path: &search_path,
+            tools_directory: &tools_directory,
+            base_environment: &base_environment,
+            process_pool,
+        };
+        admitted
+            .runtime
+            .lanes()
+            .into_iter()
+            .map(|lane| self.lane_harness(lane, inputs))
+            .collect()
+    }
+
+    /// Builds one lane's configuration from the inputs shared by every lane of this capsule.
+    fn lane_harness(
+        &self,
+        lane: RuntimeLane,
+        inputs: HostedLaneInputs<'_>,
+    ) -> Result<NativeV2HarnessConfig, CapsuleAllocationUnavailable> {
+        let HostedLaneInputs {
+            filesystem,
+            search_path,
+            tools_directory,
+            base_environment,
+            process_pool,
+        } = inputs;
+        match lane {
+            RuntimeLane::Copilot { .. } => Ok(NativeV2HarnessConfig::Copilot(
                 crate::native_v2_copilot::CopilotConfig {
                     executable: self.config.copilot_executable.clone(),
                     workspace: filesystem.workspace.clone(),
@@ -679,40 +707,35 @@ impl ProductionCapsuleAllocator {
                     local_user: None,
                     base_environment: base_environment.clone(),
                     local_command_environment: std::collections::BTreeMap::new(),
-                    search_path: search_path.clone(),
+                    search_path: search_path.to_owned(),
                     process_pool,
                 },
             )),
-            RuntimePlan::Codex { provider, .. } => {
+            RuntimeLane::Codex { provider } => {
                 Ok(NativeV2HarnessConfig::Codex(NativeV2CodexConfig {
-                    provider: *provider,
+                    provider,
                     executable: self.config.codex_executable.clone(),
                     workspace: filesystem.workspace.clone(),
                     runtime_home: filesystem.runtime_home.clone(),
                     local_user: None,
                     native_environment: Default::default(),
                     base_environment: base_environment.clone(),
-                    search_path: search_path.clone(),
+                    search_path: search_path.to_owned(),
                     process_pool,
                 }))
             }
-            RuntimePlan::Claude { provider, .. } => {
+            RuntimeLane::Claude { provider } => {
                 let base_environment = self
                     .config
                     .claude_process_environment
-                    .for_capsule(&filesystem.runtime_home, &search_path)
+                    .for_capsule(&filesystem.runtime_home, search_path)
                     .map_err(|_| CapsuleAllocationUnavailable::Runtime)?;
                 let mut values = base_environment.clone_values();
-                values.insert(
-                    "ZEROSHOT_TOOLS".to_owned(),
-                    environment::tools_directory(run_root)
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                values.insert("ZEROSHOT_TOOLS".to_owned(), tools_directory.to_owned());
                 let base_environment = ClaudeProcessEnvironment::new(values)
                     .map_err(|_| CapsuleAllocationUnavailable::Runtime)?;
                 Ok(NativeV2HarnessConfig::Claude(ClaudeAdapterConfig {
-                    provider: *provider,
+                    provider,
                     executable: self.config.claude_executable.clone(),
                     prefix_arguments: self.config.claude_prefix_arguments.clone(),
                     workspace: filesystem.workspace.clone(),
@@ -971,6 +994,16 @@ struct PendingCapsule<'a> {
     state: Arc<ProductionCapsuleState>,
     process_pool: HostedProcessPool,
     git_identity: HostedProcessIdentity,
+}
+
+/// Inputs that every hosted lane shares, computed once per capsule.
+#[derive(Clone, Copy)]
+struct HostedLaneInputs<'a> {
+    filesystem: &'a CapsuleFilesystem,
+    search_path: &'a str,
+    tools_directory: &'a str,
+    base_environment: &'a BTreeMap<String, String>,
+    process_pool: HostedProcessPool,
 }
 
 struct ProductionCapsuleState {

@@ -430,7 +430,7 @@ fn hosted_copilot_harness_and_invalid_filesystem_layout_preserve_capsule_boundar
     let allocator = test_allocator(root.path());
     let mut admitted = crate::native_v2_runner::test_support::admitted();
     let nodes = admitted.runtime.nodes().clone();
-    admitted.runtime = RuntimePlan::Copilot {
+    admitted.runtime = crate::native_v2_contract::RuntimePlan::Copilot {
         provider: crate::native_v2_contract::CopilotProvider::Github,
         size: crate::native_v2_contract::RunSize::Medium,
         nodes,
@@ -441,11 +441,11 @@ fn hosted_copilot_harness_and_invalid_filesystem_layout_preserve_capsule_boundar
     };
     let process_pool = allocator.config.process_pool;
 
-    let harness = allocator
-        .harness(&admitted, &filesystem, process_pool)
+    let lanes = allocator
+        .lanes(&admitted, &filesystem, process_pool)
         .assert_value();
-    let NativeV2HarnessConfig::Copilot(config) = harness else {
-        panic!("Copilot admission must select the Copilot harness");
+    let [NativeV2HarnessConfig::Copilot(config)] = lanes.as_slice() else {
+        panic!("Copilot admission must select only the Copilot harness");
     };
     assert_eq!(config.executable, PathBuf::from("/usr/bin/false"));
     assert_eq!(config.workspace, filesystem.workspace);
@@ -462,4 +462,78 @@ fn hosted_copilot_harness_and_invalid_filesystem_layout_preserve_capsule_boundar
     assert!(config.local_command_environment.is_empty());
 
     assert!(production_filesystem(root.path(), root.path(), process_pool).is_err());
+}
+
+#[test]
+fn hosted_lanes_build_one_configuration_per_effective_lane_from_shared_capsule_inputs() {
+    let root = TestDirectory::new("host-mixed-lanes");
+    let allocator = test_allocator(root.path());
+    // A Codex/OpenAI plan whose nodes also run on Claude/Anthropic (twice) and Copilot/GitHub.
+    let mut admitted = crate::native_v2_runner::test_support::admitted();
+    let claude_anthropic = RuntimeLane::Claude {
+        provider: crate::native_v2_contract::ClaudeProvider::Anthropic,
+    };
+    for (node, node_lane) in [
+        ("verify", claude_anthropic),
+        ("left", claude_anthropic),
+        (
+            "right",
+            RuntimeLane::Copilot {
+                provider: crate::native_v2_contract::CopilotProvider::Github,
+            },
+        ),
+    ] {
+        let name = openengine_cluster_protocol::NodeName::new(node).assert_value();
+        let Some(crate::native_v2_contract::NodeRuntimeBinding::Agent { lane, .. }) =
+            admitted.runtime.nodes_mut().get_mut(&name)
+        else {
+            panic!("the runner fixture binds {node} to an agent");
+        };
+        *lane = Some(node_lane);
+    }
+    let filesystem = CapsuleFilesystem {
+        workspace: root.child("workspace"),
+        runtime_home: root.child("runtime"),
+    };
+
+    let lanes = allocator
+        .lanes(&admitted, &filesystem, allocator.config.process_pool)
+        .assert_value();
+    let [
+        NativeV2HarnessConfig::Copilot(copilot),
+        NativeV2HarnessConfig::Codex(codex),
+        NativeV2HarnessConfig::Claude(claude),
+    ] = lanes.as_slice()
+    else {
+        panic!("expected exactly the Copilot, Codex, and Claude lanes in lane order");
+    };
+    assert_eq!(
+        codex.provider,
+        crate::native_v2_contract::CodexProvider::OpenAi
+    );
+    assert_eq!(
+        claude.provider,
+        crate::native_v2_contract::ClaudeProvider::Anthropic
+    );
+    for (workspace, runtime_home) in [
+        (&copilot.workspace, &copilot.runtime_home),
+        (&codex.workspace, &codex.runtime_home),
+        (&claude.workspace, &claude.runtime_home),
+    ] {
+        assert_eq!(workspace, &filesystem.workspace);
+        assert_eq!(runtime_home, &filesystem.runtime_home);
+    }
+
+    let tools = root.child("tools").to_string_lossy().into_owned();
+    let claude_environment = claude.base_environment.clone_values();
+    assert_eq!(copilot.base_environment.get("ZEROSHOT_TOOLS"), Some(&tools));
+    assert_eq!(codex.base_environment.get("ZEROSHOT_TOOLS"), Some(&tools));
+    assert_eq!(claude_environment.get("ZEROSHOT_TOOLS"), Some(&tools));
+    assert!(
+        copilot
+            .search_path
+            .starts_with(&format!("{}:", root.child("tools/bin").display()))
+    );
+    assert_eq!(codex.search_path, copilot.search_path);
+    assert_eq!(claude_environment.get("PATH"), Some(&copilot.search_path));
 }
