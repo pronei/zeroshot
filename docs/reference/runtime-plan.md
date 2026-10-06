@@ -1,8 +1,8 @@
 # RuntimePlan
 
-A `RuntimePlan` says how each executable node in a graph runs. It selects the harness, provider, and
-run size, and gives every `step` and `verifier` one binding. It contains model identifiers and
-connection field names, never secret values.
+A `RuntimePlan` says how each executable node in a graph runs. It selects the run size and a default
+harness and provider, and gives every `step` and `verifier` one binding. It contains model
+identifiers and connection field names, never secret values.
 
 [Runtimes and connections](../concepts/runtimes-and-connections.md) explains the concepts, and
 [Build a review loop](../guides/review-loop.md) builds a complete plan for a custom graph. The Rust
@@ -157,7 +157,9 @@ Each `model` goes to the provider of its node's effective lane, so here `worker`
 - `lane` accepts the same pairs as the run level, listed in
   [Harness and provider](#harness-and-provider). An invalid pair is rejected when the plan is read.
 - A `git_delivery` binding cannot carry a `lane`.
-- A `lane` equal to the run-level pair is accepted and behaves like no `lane`.
+- A `lane` equal to the run-level pair is accepted, and the node runs exactly as it would without
+  one. It is still a `lane` field, so the [target support](#target-support) check applies to it and
+  older binaries reject it. Omit `lane` when a node should use the default lane.
 
 Zeroshot starts one harness adapter for each distinct effective lane, and each node runs on its own
 lane's CLI. Model, effort, session scope, and connections stay per node. Provider access defaults
@@ -187,9 +189,10 @@ with a message such as:
 lane claude/anthropic needs the `claude` executable on PATH
 ```
 
-The check does not inspect login state; a missing login surfaces at that lane's first turn. Local
-lanes reuse each harness's native login, exactly as single-lane runs do. `zeroshot acp` runs the
-same check at startup.
+`zeroshot acp` runs the same check at startup. The check does not inspect login state; a missing
+login surfaces at that lane's first turn. As in a single-lane run, local `codex`/`openai`,
+`claude`/`anthropic`, and `copilot`/`github` lanes reuse their harness's native login, and other
+lanes need their provider's connection fields; see [Connections](#connections).
 
 ## Coverage
 
