@@ -169,11 +169,11 @@ also come from each node's effective lane; see [Connections](#connections).
 
 Targets that support lanes advertise `openengine.node-runtime-lanes/v1` in their discovery
 document. Before the CLI submits a run or stores a profile on a target, it checks the plan. If any
-node carries a `lane` and the target does not advertise the capability, the CLI fails before sending
-the plan, with this error:
+node carries a `lane` and the target does not advertise the capability, the command fails after
+reading the target's discovery document and before it requests an access token or sends the plan:
 
 ```text
-target does not support per-node runtime lanes (openengine.node-runtime-lanes/v1)
+target operation failed: target does not support per-node runtime lanes (openengine.node-runtime-lanes/v1)
 ```
 
 Plans without a `lane` are unchanged on the wire and work with every target. Older Zeroshot

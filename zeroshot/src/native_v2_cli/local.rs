@@ -236,6 +236,13 @@ impl LocalCliBackend {
         resumed_from: Option<RunId>,
         checkpoint: Option<crate::native_v2_supervisor::checkpoints::CheckpointRestore>,
     ) -> Result<RunId, NativeV2CliError> {
+        // Runs before any run storage or bootstrap exists, for `run` and `resume` alike. A missing
+        // harness is the caller's to fix, so it is a usage error, not a local controller failure.
+        crate::native_v2_local::check_lane_executables(
+            &prepared.submission.runtime,
+            &prepared.native_environment,
+        )
+        .map_err(|error| NativeV2CliError::Usage(error.to_string()))?;
         let adopt_existing_delivery = resumed_from.is_some();
         let paths = self.paths(&prepared.run_id)?;
         let storage = self.create_run_storage(&prepared.run_id)?;

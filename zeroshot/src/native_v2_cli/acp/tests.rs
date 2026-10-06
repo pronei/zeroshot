@@ -222,6 +222,46 @@ fn runtime(harness: &str, scope: &str, connections: Value) -> RuntimePlan {
     }
 }
 
+/// `runtime` with its `worker` agent binding moved to `lane`.
+fn with_worker_lane(mut runtime: RuntimePlan, lane: RuntimeLane) -> RuntimePlan {
+    let worker = NodeName::new("worker").assert_value();
+    let Some(NodeRuntimeBinding::Agent {
+        lane: worker_lane, ..
+    }) = runtime.nodes_mut().get_mut(&worker)
+    else {
+        panic!("the ACP runtime binds worker as an agent");
+    };
+    *worker_lane = Some(lane);
+    runtime
+}
+
+#[tokio::test]
+async fn acp_profile_validation_checks_every_effective_lane() {
+    let claude_worker = with_worker_lane(
+        runtime("codex", "node_instance", json!({})),
+        RuntimeLane::Claude {
+            provider: ClaudeProvider::Anthropic,
+        },
+    );
+    validate_profile(&acp_profile(claude_worker))
+        .await
+        .unwrap_or_else(|error| panic!("a Claude lane on a Codex plan was rejected: {error}"));
+
+    let copilot_worker = with_worker_lane(
+        runtime("claude", "node_instance", json!({})),
+        RuntimeLane::Copilot {
+            provider: CopilotProvider::Github,
+        },
+    );
+    assert_eq!(
+        validate_profile(&acp_profile(copilot_worker))
+            .await
+            .assert_error()
+            .to_string(),
+        "ACP profile is not eligible: only Codex and Claude lanes are supported"
+    );
+}
+
 #[tokio::test]
 async fn wave7_cli_contract_acp_profile_validation_rejects_unsupported_shapes() {
     let valid = runtime("codex", "node_instance", json!({}));

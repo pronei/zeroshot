@@ -301,16 +301,26 @@ config per `admitted.runtime.lanes()` entry, keeping the three existing bodies. 
 the search-path derivation (captured `PATH`, else `default_search_path`) into
 `local_search_path(&LocalHarnessEnvironment) -> String`; preflight uses the same function.
 
-Preflight, all in this module:
+Preflight:
 
 - `LocalCompositionError::MissingLaneExecutable { lane: RuntimeLane, executable: &'static str }`
   with message `lane {lane} needs the \`{executable}\` executable on PATH`.
-- `resolve_lane_executable(lane, &BTreeMap<String, String>) -> Option<PathBuf>`: split the search
-  path with `std::env::split_paths`, look for `lane.harness_name()`; on Windows honour `PATHEXT`
-  from the snapshot (default `.COM;.EXE;.BAT;.CMD`, `LocalHarnessEnvironment::get` is
-  case-insensitive there); on Unix require a regular file with an execute bit.
+- The lookup is not a separate local helper. Every harness process is spawned by
+  `build_child_command`, which resolves the program with
+  `crate::execution::platform::executable(program, child_environment)`. That module gains
+  `pub(crate) fn find_executable(program, &BTreeMap<String, String>) -> Option<PathBuf>`, the
+  lookup spawning uses. On Windows it is the loop `executable` already ran: a bare name is tried
+  only with the fixed suffixes `.exe`, `.com`, `.cmd`, and `.bat`, in that order, in each `PATH`
+  directory, and the first file wins; `PATHEXT` is ignored and an extensionless file never
+  matches. `executable` becomes `find_executable(..).unwrap_or_else(|| program.into())` there, so
+  Windows spawning is unchanged. Elsewhere `executable` still returns the name for the OS to
+  search, and `find_executable` follows that search: a name containing a path separator is checked
+  directly, and a bare name is looked up in each nonempty `PATH` directory as a regular file with
+  at least one execute bit.
 - `check_lane_executables(&RuntimePlan, &BTreeMap<String, String>) -> Result<(), LocalCompositionError>`
-  over `runtime.lanes()`.
+  in this module builds a lookup environment whose `PATH` is `local_search_path` of the snapshot
+  and calls `find_executable(lane.harness_name(), ..)` for each of `runtime.lanes()` in order,
+  failing on the first missing one.
 
 The native environment comes from the real process environment
 (`capture_local_native_environment` reads `std::env::vars_os`), so it cannot be injected through
@@ -367,23 +377,29 @@ and calls `allocator.harness(...)`; switch to `lanes` and destructure
   and `target_discovery(address)` (see `assert_workspace_recovery_capability` near line 788 for
   the assertion style).
 - Client descriptor: `zeroshot/src/native_v2_target/controller_authority/contract.rs`.
-  `ControllerDescriptor` gains `node_runtime_lanes: bool`, parsed by a
-  `parse_node_runtime_lanes` twin of `parse_workspace_recovery` (exact kind → true, other kind →
-  `authority_error("node-runtime-lanes discovery is incompatible")`, absent → false). Add
-  `require_node_runtime_lanes(&ControllerDescriptor, &RuntimePlan)`, failing with
+  `ControllerDescriptor` gains `node_runtime_lanes: bool`, read by `parse_node_runtime_lanes`:
+  the exact kind is true; an absent marker or any other kind is false. Unlike
+  `parse_workspace_recovery`, another kind is not a descriptor error, because plans without lanes
+  must keep working with every target. Tests in `contract/tests.rs` cover the three cases.
+- Guard: `require_node_runtime_lanes(&ControllerDescriptor, &RuntimePlan)` beside
+  `require_session_capability` in `controller_authority.rs`, failing with
   `target does not support per-node runtime lanes (openengine.node-runtime-lanes/v1)` when
-  `runtime.has_lane_overrides()` and the descriptor says false. Tests in `contract/tests.rs`
-  follow `controller_descriptor_reads_only_the_exact_workspace_recovery_capability`.
-- Submit: `controller_authority/control.rs::submit` (near line 94) obtains
-  `(controller, access)` from `controller_access`; call the guard with
-  `&request.submission.runtime` before building the POST.
-- Remote profile set: `controller_authority/profiles.rs`. `profile_access` returns
-  `(RunProfilesDescriptor, AccessToken)` from `self.descriptors(target)`, which also yields the
-  `ControllerDescriptor`; `profile_json(&self, target, operation, input)` is at the four-parameter
-  ceiling. Return the controller descriptor from `profile_access` and fold `operation`, `input`,
-  and an `Option<&RuntimePlan>` into a `ProfileRequest<'_, I>` struct so `profile_json` can run the
-  guard for `profile_set` (`Some(&request.runtime)`) and `None` for the other five operations.
-  `profile_run` needs no guard: the plan is already stored on the target.
+  `runtime.has_lane_overrides()` and the descriptor says false. Unit tests in
+  `controller_authority/tests.rs`.
+- Submit: the guard must run after the descriptor is resolved and before any access token is
+  acquired, not after `controller_access`: on hosted targets `access_token` may POST a refresh
+  exchange, which would send a request body before the refusal. `submit` in
+  `controller_authority/control.rs` uses `controller_access_for_runtime(target, runtime)`, which
+  passes the plan to `controller_access_inner`; that resolves `descriptors_inner(General)` (hosted)
+  or `controller_descriptor` (direct), runs the guard, and only then, on hosted targets, calls
+  `access_token`. No `TargetSessionPurpose` variant is added.
+- Remote profile set: `controller_authority/profiles.rs`. Direct targets already reject every
+  profile operation. `profile_access` runs the guard after `self.descriptors(target)` and the
+  profile-route check, and before `access_token`. `profile_json(&self, target, operation, input)`
+  is at the four-parameter ceiling, so the plan travels through a private `ProfileBody` trait that
+  every request body implements: `stored_runtime()` is `Some(&self.runtime)` for
+  `RunProfileSetRequest` and `None` for the rest. `profile_run` needs no guard: the plan is
+  already stored on the target. No path gains an HTTP request.
 - Tests for the submit path: `zeroshot/src/native_v2_target/tests/hosted_authority/direct.rs`
   has a fake direct target (`spawn_direct_target_authority(request_count)`, discovery built by
   `discovery(address)`); add `.with_node_runtime_lanes()` there so lane-bearing submissions reach
@@ -393,23 +409,30 @@ and calls `allocator.harness(...)`; switch to `lanes` and destructure
   message (`test_http_authority`, `direct_target`, `exact_run_request` live in
   `tests/fixtures.rs`; `problem_errors.rs` shows the pattern; register a new test file in
   `hosted_authority.rs` with `#[path]`). `CapturedHttpRequest` has `method`, `path`,
-  `authorization`, `body`.
+  `authorization`, `body`. Built as `hosted_authority/runtime_lanes.rs`: a recording fake answers
+  until stopped, so a test sees every request. Without the marker, a direct submission stops after
+  the discovery GET, and a hosted submission or profile set stops after the discovery and OAuth
+  metadata GETs, with no token POST. With the marker, both proceed and send the lane.
 
 ## Phase 3: CLI wiring, ACP, help text
 
 - Preflight call: `zeroshot/src/native_v2_cli/local.rs::start_prepared_controller_with_lineage`
   (near line 235) is reached by both `run` (via `start_controller`) and `resume` (via
-  `local/backend.rs::start_local_successor`). Insert
-  `crate::native_v2_local::check_lane_executables(&prepared.submission.runtime, &prepared.native_environment).map_err(local_error)?;`
-  as its first statement, before `create_run_storage`. `local_error` wraps into
-  `NativeV2CliError::Local(String)`, so the message surfaces verbatim.
+  `local/backend.rs::start_local_successor`). Its first statement, before `create_run_storage`,
+  is `crate::native_v2_local::check_lane_executables(&prepared.submission.runtime, &prepared.native_environment)`
+  mapped with `NativeV2CliError::Usage(error.to_string())`, not `local_error`: `local_error`
+  wraps into `NativeV2CliError::Local`, which prefixes `local controller operation failed: `.
+  `Usage` prints the bare message and gets the `request.invalid` diagnostic code. A `resume` that
+  fails here still reconciles its claimed workspace, because `start_local_successor` calls
+  `reconcile_local_resume_claim` on any error and the successor storage does not exist yet.
 - ACP (`zeroshot/src/native_v2_cli/acp.rs`): `validate_profile` (near line 846) rejects at run
   level with "only Codex and Claude runtimes are supported"; replace with a check over
   `profile.runtime.lanes()` rejecting any `RuntimeLane::Copilot` with "only Codex and Claude lanes
   are supported" (the existing test matches on "only Codex and Claude"). In `serve_local_acp`
   after `validate_profile`, capture the native environment with
   `crate::native_v2_local::capture_local_native_environment(&std::env::current_dir()...)` (the
-  pattern at line ~518) and call `check_lane_executables`. Tests in `acp/tests.rs` have
+  pattern at line ~518) and call `check_lane_executables`, mapping its error into `AcpServeError`
+  through `NativeV2CliError::Usage` as `materialize_acp_provider_access` does. Tests in `acp/tests.rs` have
   `runtime(harness, scope, connections)` and `acp_profile`; add a case where a Codex plan's
   `worker` carries a Claude lane (accepted) and where a Claude plan's `worker` carries a Copilot
   lane (rejected), mutating through `nodes_mut()`.

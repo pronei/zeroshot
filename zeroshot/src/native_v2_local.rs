@@ -11,8 +11,8 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use openengine_cluster_protocol::{
-    RunId, RunSubmission, RuntimeLane, SourceBranchId, SourceRepositoryId, SourceRevisionId,
-    ResolvedSource,
+    RunId, RunSubmission, RuntimeLane, RuntimePlan, SourceBranchId, SourceRepositoryId,
+    SourceRevisionId, ResolvedSource,
 };
 use thiserror::Error;
 use url::Url;
@@ -60,6 +60,11 @@ pub enum LocalCompositionError {
     Storage,
     #[error("local harness environment could not be represented")]
     NativeEnvironment,
+    #[error("lane {lane} needs the `{executable}` executable on PATH")]
+    MissingLaneExecutable {
+        lane: RuntimeLane,
+        executable: &'static str,
+    },
     #[error(transparent)]
     Claude(#[from] ClaudeAdapterConfigError),
     #[error(transparent)]
@@ -436,6 +441,26 @@ pub(crate) fn local_search_path(environment: &LocalHarnessEnvironment) -> String
         .filter(|value| !value.is_empty())
         .cloned()
         .unwrap_or_else(|| default_search_path(environment))
+}
+
+/// Checks that every lane of `runtime` finds its harness executable on the search path its adapter
+/// spawns with: the captured `PATH`, else the platform default. The lookup is
+/// `crate::execution::platform::find_executable`, the resolution process spawning uses. Lanes are
+/// checked in lane order and the first missing executable fails. Login state is never probed.
+/// Callers run this before they create any run state.
+pub(crate) fn check_lane_executables(
+    runtime: &RuntimePlan,
+    native_environment: &BTreeMap<String, String>,
+) -> Result<(), LocalCompositionError> {
+    let search_path = local_search_path(&LocalHarnessEnvironment::new(native_environment.clone()));
+    let lookup = BTreeMap::from([("PATH".to_owned(), search_path)]);
+    for lane in runtime.lanes() {
+        let executable = lane.harness_name();
+        if crate::execution::platform::find_executable(executable, &lookup).is_none() {
+            return Err(LocalCompositionError::MissingLaneExecutable { lane, executable });
+        }
+    }
+    Ok(())
 }
 
 fn current_user_home(environment: &LocalHarnessEnvironment) -> Option<PathBuf> {

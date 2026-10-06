@@ -91,6 +91,31 @@ pub(crate) fn executable(
 ) -> std::path::PathBuf {
     #[cfg(windows)]
     {
+        find_executable(program, environment).unwrap_or_else(|| program.into())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = environment;
+        program.into()
+    }
+}
+
+/// The file that spawning `program` with the child environment `environment` runs, or `None`
+/// when there is none. A preflight uses it to check what process spawning will run.
+///
+/// On Windows, [`executable`] spawns exactly this result. A name with a directory is checked
+/// where it points, and a bare name in each directory of `PATH`. A name without an extension is
+/// tried only with `.exe`, `.com`, `.cmd`, and `.bat`, in that order, and the first file wins.
+/// `PATHEXT` is ignored, so an extensionless file never matches. Elsewhere spawning leaves the
+/// search to the OS, which this follows: a name containing a path separator is checked directly,
+/// and a bare name is looked up in each nonempty directory of `PATH`. There a match is a regular
+/// file with at least one execute bit.
+pub(crate) fn find_executable(
+    program: &str,
+    environment: &std::collections::BTreeMap<String, String>,
+) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
         let path = std::path::Path::new(program);
         let roots = if path.components().count() > 1 {
             vec![std::path::PathBuf::new()]
@@ -113,12 +138,30 @@ pub(crate) fn executable(
                 name.push(suffix);
                 let candidate = std::path::PathBuf::from(name);
                 if candidate.is_file() {
-                    return candidate;
+                    return Some(candidate);
                 }
             }
         }
+        None
     }
     #[cfg(not(windows))]
-    let _ = environment;
-    program.into()
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let runnable = |candidate: &std::path::Path| {
+            std::fs::metadata(candidate).is_ok_and(|metadata| {
+                metadata.is_file() && (metadata.permissions().mode() & 0o111) != 0
+            })
+        };
+        if program.contains(std::path::is_separator) {
+            let candidate = std::path::PathBuf::from(program);
+            return runnable(&candidate).then_some(candidate);
+        }
+        // An empty entry is a legacy spelling of the working directory. Skipping it keeps an empty
+        // `PATH` from matching files in whatever directory this process happens to run in.
+        std::env::split_paths(environment.get("PATH")?)
+            .filter(|directory| !directory.as_os_str().is_empty())
+            .map(|directory| directory.join(program))
+            .find(|candidate| runnable(candidate))
+    }
 }

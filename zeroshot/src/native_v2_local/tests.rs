@@ -1,4 +1,4 @@
-use openengine_cluster_testkit::assertions::AssertValue;
+use openengine_cluster_testkit::assertions::{AssertError, AssertValue};
 use serde_json::{Value, json};
 
 use super::*;
@@ -371,6 +371,94 @@ fn local_search_path_prefers_the_captured_nonempty_path() {
             default_search_path(&environment)
         );
     }
+}
+
+/// A Codex plan with the given node bindings.
+fn codex_plan(nodes: Value) -> RuntimePlan {
+    serde_json::from_value(json!({
+        "harness": "codex",
+        "provider": "openai",
+        "size": "small",
+        "nodes": nodes
+    }))
+    .assert_value()
+}
+
+/// `worker` on the run-level `codex/openai` lane and `reviewer` on `claude/anthropic`.
+fn mixed_lane_plan() -> RuntimePlan {
+    codex_plan(json!({
+        "worker": { "kind": "agent", "model": "provider-owned-model" },
+        "reviewer": {
+            "kind": "agent",
+            "lane": { "harness": "claude", "provider": "anthropic" },
+            "model": "provider-owned-model"
+        }
+    }))
+}
+
+/// A captured environment whose only search directory is a fresh, empty `bin`.
+fn search_directory(root: &TestDirectory) -> (PathBuf, BTreeMap<String, String>) {
+    let bin = root.child("bin");
+    std::fs::create_dir(&bin).assert_value();
+    let environment = BTreeMap::from([("PATH".to_owned(), bin.to_string_lossy().into_owned())]);
+    (bin, environment)
+}
+
+/// A placeholder for `name` that process spawning would find in `directory`.
+fn install_executable(directory: &Path, name: &str) {
+    #[cfg(unix)]
+    openengine_cluster_testkit::fixture::write_executable(
+        &directory.join(name),
+        "#!/bin/sh\nexit 0\n",
+        0o755,
+    )
+    .assert_value();
+    #[cfg(windows)]
+    std::fs::write(directory.join(format!("{name}.cmd")), "@exit /b 0\r\n").assert_value();
+}
+
+#[test]
+fn lane_executables_pass_when_every_lane_finds_its_executable() {
+    let root = TestDirectory::new("lane-executables-present");
+    let (bin, environment) = search_directory(&root);
+    install_executable(&bin, "codex");
+    install_executable(&bin, "claude");
+
+    check_lane_executables(&mixed_lane_plan(), &environment).assert_value();
+}
+
+#[test]
+fn a_missing_lane_executable_names_the_first_such_lane_and_its_executable() {
+    let root = TestDirectory::new("lane-executables-missing");
+    let (bin, environment) = search_directory(&root);
+
+    let error = check_lane_executables(&mixed_lane_plan(), &environment).assert_error();
+    assert_eq!(
+        error.to_string(),
+        "lane codex/openai needs the `codex` executable on PATH"
+    );
+
+    install_executable(&bin, "codex");
+    let error = check_lane_executables(&mixed_lane_plan(), &environment).assert_error();
+    assert!(matches!(
+        error,
+        LocalCompositionError::MissingLaneExecutable {
+            lane: RuntimeLane::Claude { .. },
+            executable: "claude",
+        }
+    ));
+    assert_eq!(
+        error.to_string(),
+        "lane claude/anthropic needs the `claude` executable on PATH"
+    );
+}
+
+#[test]
+fn a_plan_without_agent_nodes_needs_no_lane_executable() {
+    let root = TestDirectory::new("lane-executables-none");
+    let (_bin, environment) = search_directory(&root);
+
+    check_lane_executables(&codex_plan(json!({})), &environment).assert_value();
 }
 
 #[test]

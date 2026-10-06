@@ -129,3 +129,108 @@ fn windows_preserves_local_profile_folders_and_isolates_private_homes() {
     assert_eq!(private["APPDATA"], r"C:\private-home\AppData\Roaming");
     assert_eq!(private["LOCALAPPDATA"], r"C:\private-home\AppData\Local");
 }
+
+#[cfg(unix)]
+#[test]
+fn find_executable_takes_the_first_runnable_regular_file_on_path() {
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = TemporaryDirectory::for_test("find-executable");
+    let [plain, directory, runnable, later] =
+        ["plain", "directory", "runnable", "later"].map(|name| root.path(name));
+    for path in [&plain, &directory, &runnable, &later] {
+        fs::create_dir(path).unwrap();
+    }
+    // A file without an execute bit and a directory of the same name are skipped, as the OS
+    // search skips them.
+    fs::write(plain.join("harness"), "#!/bin/sh\n").unwrap();
+    fs::set_permissions(plain.join("harness"), fs::Permissions::from_mode(0o644)).unwrap();
+    fs::create_dir(directory.join("harness")).unwrap();
+    for bin in [&runnable, &later] {
+        openengine_cluster_testkit::fixture::write_executable(
+            &bin.join("harness"),
+            "#!/bin/sh\n",
+            0o755,
+        )
+        .unwrap();
+    }
+    let search_path = std::env::join_paths([&plain, &directory, &runnable, &later]).unwrap();
+    let environment = BTreeMap::from([("PATH".to_owned(), search_path.into_string().unwrap())]);
+
+    assert_eq!(
+        find_executable("harness", &environment),
+        Some(runnable.join("harness"))
+    );
+    // A name with a path separator is checked where it points, whatever PATH holds.
+    let direct = later.join("harness");
+    assert_eq!(
+        find_executable(direct.to_str().unwrap(), &BTreeMap::new()),
+        Some(direct)
+    );
+    assert_eq!(
+        find_executable(plain.join("harness").to_str().unwrap(), &environment),
+        None
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn find_executable_is_none_without_a_match_or_a_search_path() {
+    use std::collections::BTreeMap;
+
+    let root = TemporaryDirectory::for_test("find-executable-none");
+    let bin = root.path("bin");
+    fs::create_dir(&bin).unwrap();
+    openengine_cluster_testkit::fixture::write_executable(
+        &bin.join("harness"),
+        "#!/bin/sh\n",
+        0o755,
+    )
+    .unwrap();
+    let path = |value: &str| BTreeMap::from([("PATH".to_owned(), value.to_owned())]);
+
+    assert_eq!(
+        find_executable("harness", &path(bin.to_str().unwrap())),
+        Some(bin.join("harness"))
+    );
+    assert_eq!(
+        find_executable("absent", &path(bin.to_str().unwrap())),
+        None
+    );
+    assert_eq!(find_executable("harness", &path("")), None);
+    assert_eq!(find_executable("harness", &BTreeMap::new()), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_find_executable_tries_only_the_fixed_suffixes() {
+    use std::collections::BTreeMap;
+
+    let root = TemporaryDirectory::for_test("find-executable-windows");
+    let shim = root.path("shim");
+    let bare = root.path("bare");
+    fs::create_dir(&shim).unwrap();
+    fs::create_dir(&bare).unwrap();
+    fs::write(shim.join("harness"), "extensionless placeholder").unwrap();
+    fs::write(shim.join("harness.cmd"), "@exit /b 0\r\n").unwrap();
+    fs::write(bare.join("harness"), "extensionless placeholder").unwrap();
+    // Windows spells the variable `Path`; the lookup ignores its case.
+    let path = |directory: &std::path::Path| {
+        BTreeMap::from([("Path".to_owned(), directory.to_str().unwrap().to_owned())])
+    };
+
+    assert_eq!(
+        find_executable("harness", &path(&shim)),
+        Some(shim.join("harness.cmd"))
+    );
+    assert_eq!(find_executable("harness", &path(&bare)), None);
+    assert_eq!(
+        executable("harness", &path(&shim)),
+        shim.join("harness.cmd")
+    );
+    assert_eq!(
+        executable("harness", &path(&bare)),
+        std::path::PathBuf::from("harness")
+    );
+}

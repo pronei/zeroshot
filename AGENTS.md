@@ -67,10 +67,12 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   adapter per distinct effective lane and route each node to its own lane's adapter, never falling
   back to another lane; adapters keep their provider fixed and never switch it per turn. Provider
   access is derived per node from its effective lane, and connection requirements are the union
-  over nodes. Targets advertise `openengine.node-runtime-lanes/v1`; the CLI refuses to submit or
-  store a lane-bearing plan on a target that does not, before sending any request body. Local
-  `run`/`resume` and `zeroshot acp` check every lane's executable on the captured search path
-  before launch and never probe login state.
+  over nodes. Targets advertise `openengine.node-runtime-lanes/v1`. The CLI refuses to submit or
+  store a lane-bearing plan on a target without that exact marker kind, after discovery and before
+  acquiring an access token, so no request body is sent; an absent or different marker never fails
+  discovery. Local `run`/`resume` and `zeroshot acp` check every lane's executable on the captured
+  search path before launch with `find_executable`, the lookup process spawning uses, report a
+  missing one as a usage error, and never probe login state.
 - The `gateway` provider resolves `GATEWAY_BASE_URL` and `GATEWAY_API_KEY` through named
   connections. Codex uses Responses with bearer authentication; Claude uses Messages with
   `x-api-key`. Preserve caller-owned base paths and model identifiers without protocol detection.

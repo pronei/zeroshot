@@ -121,7 +121,11 @@ An override equal to the run-level lane is accepted and means the same as no ove
 | `lane(&self) -> RuntimeLane`                                          | The run-level lane                                                       |
 | `effective_lane(&self, &NodeRuntimeBinding) -> Option<RuntimeLane>`   | The binding's `lane`, else the run-level lane; `None` for `git_delivery` |
 | `lanes(&self) -> BTreeSet<RuntimeLane>`                               | Distinct effective lanes across all agent bindings                       |
+| `has_lane_overrides(&self) -> bool`                                   | Whether any agent binding carries its own `lane`, even the run-level one |
 | `nodes_mut(&mut self) -> &mut BTreeMap<NodeName, NodeRuntimeBinding>` | Mutable node access                                                      |
+
+`has_lane_overrides` sits beside `connection_requirements` in the protocol crate, so a host that
+depends only on the protocol crate can apply the same [client check](#client-check) as the CLI.
 
 Every product consumer that destructures the three plan variants today moves to these accessors.
 `nodes_mut` replaces the two private helpers that do the same destructuring in
@@ -163,15 +167,24 @@ the marker and is refused cleanly until then.
 
 ### Client check
 
-A helper on the product side reports whether a plan carries any per-node lane. The controller
-authority (`zeroshot/src/native_v2_target/controller_authority/`) applies it before:
+`RuntimePlan::has_lane_overrides` reports whether a plan carries any per-node lane. It lives in the
+protocol crate beside `connection_requirements`, so hosts that depend only on the protocol crate
+can apply the same check. The controller authority
+(`zeroshot/src/native_v2_target/controller_authority/`) applies it before:
 
 - any hosted or direct-target run submission;
-- any remote profile set or apply.
+- any remote profile set. Direct targets reject every profile operation, so this is a hosted
+  check. Running a stored profile needs none because its plan already lives on the target.
 
 If the plan carries a lane and the target does not advertise the marker, or advertises it with a
-different `kind`, the operation fails with a `TargetAuthorityError` whose message names the
-capability, before any request body is sent. Local runs and `--validate-only` need no check
+different `kind`, the operation fails with a `TargetAuthorityError` that names the capability:
+"target does not support per-node runtime lanes (openengine.node-runtime-lanes/v1)". A different
+`kind` counts as unsupported. Unlike the workspace capabilities it is not a discovery error, so
+plans without lanes keep working with every target.
+
+The check runs once the target's descriptor is resolved and before any access token is acquired.
+A hosted token request may POST a refresh exchange, so a refusal sends no request body at all:
+no token exchange and no run or profile POST. Local runs and `--validate-only` need no check
 because they never leave the binary.
 
 ### What older readers do
@@ -254,14 +267,25 @@ Before the local CLI launches a detached controller, for `run` and for `resume` 
 checks every lane in the plan:
 
 - Resolve the lane's executable name (`copilot`, `codex`, or `claude`) on the same search path the
-  adapters will use: `PATH` from the captured shell snapshot, else the default search path. On
-  Windows the lookup honours `PATHEXT` from the snapshot, defaulting to `.COM;.EXE;.BAT;.CMD`.
+  adapters will use: `PATH` from the captured shell snapshot, else the default search path.
 - Fail with a usage error that names the lane and the executable, for example
   "lane claude/anthropic needs the `claude` executable on PATH", before any run state is created.
 
-The lookup lives in one shared helper beside the local root so preflight and composition cannot
-disagree. Adapters keep spawning by name, so turn behaviour is unchanged. `zeroshot acp` applies
-the same check when it validates its profile at startup.
+The lookup is `find_executable` in `zeroshot/src/execution/platform.rs`, beside the `executable`
+resolution that process spawning uses, so preflight checks what spawning will run. On Windows,
+`executable` spawns exactly its result: a bare name is tried only with the fixed suffixes `.exe`,
+`.com`, `.cmd`, and `.bat`, in that order, in each directory of the child's `PATH`. `PATHEXT` is
+ignored, and an extensionless file never matches. On other platforms spawning leaves the search to
+the OS, and `find_executable` follows it: a name containing a path separator is checked directly,
+and a bare name is looked up in each nonempty directory of `PATH` as a regular file with at least
+one execute bit.
+
+The failure is `NativeV2CliError::Usage`, not the `NativeV2CliError::Local` that other local
+errors use, so its message has no `local controller operation failed:` prefix and its diagnostic
+code is `request.invalid`. The check is the first step of starting a local controller, before run
+storage or the bootstrap exists, and a failed `resume` still reconciles the claimed workspace.
+Adapters keep spawning by name, so turn behaviour is unchanged. `zeroshot acp` applies the same
+check after it validates its profile at startup.
 
 Preflight does not probe login state. The repository's invariants forbid validating provider
 availability, and the three CLIs have no common headless status command. Connection values for
@@ -339,7 +363,7 @@ Beside each owning module, following existing fixtures:
   authored fields still win.
 - Preflight: Unix executable fixtures created with
   `openengine_cluster_testkit::fixture::write_executable`; one missing lane executable yields the
-  named error and no run state; all present proceeds; Windows `PATHEXT` handling.
+  named error and no run state; all present proceeds; on Windows only the fixed suffixes match.
 - Target client: refusal without the marker and acceptance with it, for submission and remote
   profile set.
 - ACP: mixed Codex and Claude accepted; a Copilot lane rejected.

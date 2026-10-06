@@ -13,8 +13,8 @@ use acp::Client as _;
 use async_trait::async_trait;
 use openengine_cluster_protocol::{
     FieldName, GraphNode, IdempotencyKey, PayloadType, RunConnectionValues, RunId, RunProfile,
-    RunProfileName, RunProfileScope, RunProfileSelector, RunSubmission, RunTitle, RuntimePlan,
-    SessionScope, TerminalResult,
+    RunProfileName, RunProfileScope, RunProfileSelector, RunSubmission, RunTitle, RuntimeLane,
+    RuntimePlan, SessionScope, TerminalResult,
 };
 use serde_json::{json, Map, Value};
 use thiserror::Error;
@@ -100,6 +100,7 @@ pub async fn serve_local_acp(profile_name: RunProfileName) -> Result<(), AcpServ
     })?;
     materialize_acp_provider_access(&mut profile.runtime)?;
     validate_profile(&profile).await?;
+    check_acp_lane_executables(&profile.runtime)?;
     let core = Arc::new(AcpCore::new(profile, default_local_state_root()?));
     let local = tokio::task::LocalSet::new();
     local
@@ -110,6 +111,17 @@ pub async fn serve_local_acp(profile_name: RunProfileName) -> Result<(), AcpServ
 
 fn materialize_acp_provider_access(runtime: &mut RuntimePlan) -> Result<(), AcpServeError> {
     materialize_provider_access(runtime, ProviderAccessPlacement::Local)
+        .map_err(|error| NativeV2CliError::Usage(error.to_string()).into())
+}
+
+/// Fails startup when a lane's harness executable is missing from the invoking shell's search
+/// path, which each session captures again when it builds its candidate. A missing harness is
+/// the caller's to fix, so it is a usage error, as it is for a local run.
+fn check_acp_lane_executables(runtime: &RuntimePlan) -> Result<(), AcpServeError> {
+    let invoking_directory = std::env::current_dir().map_err(AcpServeError::Storage)?;
+    let native_environment =
+        crate::native_v2_local::capture_local_native_environment(&invoking_directory)?;
+    crate::native_v2_local::check_lane_executables(runtime, &native_environment)
         .map_err(|error| NativeV2CliError::Usage(error.to_string()).into())
 }
 
@@ -845,12 +857,14 @@ fn submission(
 
 async fn validate_profile(profile: &RunProfile) -> Result<(), AcpServeError> {
     validate_task_type(&profile.graph.initial_input)?;
-    if !matches!(
-        profile.runtime,
-        RuntimePlan::Codex { .. } | RuntimePlan::Claude { .. }
-    ) {
+    if profile
+        .runtime
+        .lanes()
+        .iter()
+        .any(|lane| matches!(lane, RuntimeLane::Copilot { .. }))
+    {
         return Err(AcpServeError::Profile(
-            "only Codex and Claude runtimes are supported",
+            "only Codex and Claude lanes are supported",
         ));
     }
     let mut success_count = 0;
