@@ -20,7 +20,15 @@ import { appendControlHistory, type ControlRecord } from './control-history';
 import { RecordedValue } from './RecordedValue';
 import { Transcript } from './Transcript';
 import { WorkflowCanvas } from './WorkflowCanvas';
-import { findNode, labels, type Document, type GraphNode, type Positions } from './domain';
+import {
+  effectiveLanes,
+  findNode,
+  hasNodeLanes,
+  labels,
+  type Document,
+  type GraphNode,
+  type Positions,
+} from './domain';
 import type { WorkerOption } from './workers';
 import { appendHistory, type RunHistoryReader } from './run-history-source';
 import {
@@ -989,6 +997,18 @@ function RunInspector({
               <dt>Runtime</dt>
               <dd>
                 {run.runtime.harness} / {run.runtime.provider}
+                {hasNodeLanes(run.runtime) && (
+                  <>
+                    {' (default)'}
+                    <ul className="run-lanes" aria-label="Runtime per node">
+                      {effectiveLanes(document).map(({ name, lane }) => (
+                        <li key={name}>
+                          {humanize(name)}: {lane.harness} / {lane.provider}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
               </dd>
               <dt>At cursor</dt>
               <dd className="mono">{moment.cursor}</dd>

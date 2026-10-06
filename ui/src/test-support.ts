@@ -15,6 +15,37 @@ export async function createViteTestServer(t: TestContext) {
   return server;
 }
 
+// Shaped like the served schema_for!(RuntimePlan): root oneOf variants, each with a harness
+// const and a provider $ref into $defs.
+export const runtimeSchemaFixture = () => {
+  const variant = (harness: string, provider: string) => ({
+    type: 'object',
+    additionalProperties: false,
+    required: ['harness', 'provider', 'size', 'nodes'],
+    properties: {
+      harness: { type: 'string', const: harness },
+      provider: { $ref: `#/$defs/${provider}` },
+      size: { $ref: '#/$defs/RunSize' },
+      nodes: { type: 'object' },
+    },
+  });
+  return {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    title: 'RuntimePlan',
+    oneOf: [
+      variant('copilot', 'CopilotProvider'),
+      variant('codex', 'CodexProvider'),
+      variant('claude', 'ClaudeProvider'),
+    ],
+    $defs: {
+      CopilotProvider: { type: 'string', enum: ['github'] },
+      CodexProvider: { type: 'string', enum: ['openai', 'openrouter', 'gateway', 'bedrock'] },
+      ClaudeProvider: { type: 'string', enum: ['anthropic', 'openrouter', 'gateway', 'bedrock'] },
+      RunSize: { type: 'string', enum: ['small', 'medium', 'large'] },
+    },
+  };
+};
+
 export const runDetailFixture = (runId = 'run/selected'): RunDetail => ({
   version: 1,
   projectionVersion: 1,

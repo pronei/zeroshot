@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { ModelPicker } from './ModelPicker';
 import { RuntimeEditor } from './RuntimeEditor';
 import { assertDocument, type Document } from './domain';
+import { runtimeSchemaFixture } from './test-support';
 
 function elements(value: ReactNode): ReactElement<any>[] {
   if (Array.isArray(value)) return value.flatMap(elements);
@@ -107,4 +108,90 @@ test('runtime model editing does not offer implicit conversion of unknown or mis
     assert.equal(elements(view).filter((element) => element.type === ModelPicker).length, 0);
     assert.deepEqual(doc, before);
   }
+});
+
+function crossVendor(): Document {
+  const doc = document('codex', 'openai');
+  doc.graph.root.children.splice(1, 0, {
+    kind: 'verifier',
+    name: 'reviewer',
+    worker: 'agent.reviewer@1',
+  });
+  doc.runtime.nodes.reviewer = {
+    kind: 'agent',
+    lane: { harness: 'claude', provider: 'anthropic' },
+    model: 'review-model',
+  };
+  return doc;
+}
+
+test('per-node rows mark overrides and give each model picker the node lane', () => {
+  const doc = crossVendor(),
+    before = structuredClone(doc);
+  const editor = {
+    document: doc,
+    schema: runtimeSchemaFixture(),
+    edit: () => {},
+    openJson: () => {},
+  };
+  const pickers = elements(RuntimeEditor(editor)).filter((element) => element.type === ModelPicker);
+  assert.deepEqual(
+    pickers.map(({ props }) => [props.label, props.harness, props.provider]),
+    [
+      ['Model for worker', 'codex', 'openai'],
+      ['Model for reviewer', 'claude', 'anthropic'],
+    ]
+  );
+  const html = renderToStaticMarkup(createElement(RuntimeEditor, editor));
+  assert.match(
+    html,
+    /Default for every node\. A node can override its harness and provider in the inspector\./
+  );
+  assert.equal(html.match(/Override: /g)?.length, 1);
+  assert.match(
+    html,
+    /<span class="mono">reviewer<\/span><small>Override: Claude Code \/ anthropic<\/small>/
+  );
+  assert.match(html, /<option value="gpt-6-astra">/);
+  assert.match(html, /<option value="claude-fable-5-1">/);
+
+  doc.runtime.nodes.reviewer.lane = { harness: 'claude', provider: '' };
+  assert.match(
+    renderToStaticMarkup(createElement(RuntimeEditor, editor)),
+    /<small>Override: Claude Code \/ no provider<\/small>/
+  );
+  doc.runtime.nodes.reviewer.lane = before.runtime.nodes.reviewer.lane;
+  assert.deepEqual(doc, before);
+});
+
+test('run-level harness edits clear node lanes while provider and size edits keep them', () => {
+  const doc = crossVendor(),
+    before = structuredClone(doc);
+  const edits: { next: Document; key?: string }[] = [];
+  const view = RuntimeEditor({
+    document: doc,
+    schema: runtimeSchemaFixture(),
+    edit: (next, key) => edits.push({ next, key }),
+    openJson: () => {},
+  });
+  const [harness, provider, size] = elements(view).filter((element) => element.type === 'select');
+  provider.props.onChange({ target: { value: 'openrouter' } });
+  size.props.onChange({ target: { value: 'large' } });
+  harness.props.onChange({ target: { value: 'claude' } });
+  assert.deepEqual(
+    edits.map(({ key }) => key),
+    ['runtime.provider', 'runtime.size', 'runtime.harness']
+  );
+  const [providerEdit, sizeEdit, harnessEdit] = edits.map(({ next }) => next);
+  assert.equal(providerEdit.runtime.provider, 'openrouter');
+  assert.deepEqual(providerEdit.runtime.nodes, before.runtime.nodes);
+  assert.equal(sizeEdit.runtime.size, 'large');
+  assert.deepEqual(sizeEdit.runtime.nodes, before.runtime.nodes);
+  assert.equal(harnessEdit.runtime.harness, 'claude');
+  assert.equal(harnessEdit.runtime.provider, '');
+  assert.equal(Object.hasOwn(harnessEdit.runtime.nodes.reviewer, 'lane'), false);
+  assert.equal(harnessEdit.runtime.nodes.reviewer.model, 'review-model');
+  assert.deepEqual(harnessEdit.runtime.nodes.worker, before.runtime.nodes.worker);
+  for (const edit of [providerEdit, sizeEdit, harnessEdit]) assertDocument(edit);
+  assert.deepEqual(doc, before);
 });

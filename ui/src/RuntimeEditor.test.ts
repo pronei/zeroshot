@@ -66,7 +66,10 @@ test('graph runtime configuration renders independently of the node inspector', 
         openJson: () => {},
       })
     );
-    assert.match(html, /Applies to the whole graph/);
+    assert.match(
+      html,
+      /Default for every node\. A node can override its harness and provider in the inspector\./
+    );
     assert.match(html, /custom-model/);
     assert.match(html, /Git delivery/);
     assert.doesNotMatch(html, /Model for deliver/);

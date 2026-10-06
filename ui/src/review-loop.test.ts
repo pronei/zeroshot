@@ -115,6 +115,25 @@ test('review loop keeps writer identity, runtime and existing data while wiring 
   assert.deepEqual(source, before);
 });
 
+test('a reviewer starts on the reviewed activity lane, so its copied model keeps its runtime', () => {
+  const source = document();
+  source.runtime.nodes.draft.lane = { harness: 'claude', provider: 'anthropic' };
+  const before = structuredClone(source);
+  const result = createReviewLoop(source, 'draft');
+  const loop = findNode(result.document.graph.root, result.name)!;
+  const reviewer = allNodes(loop).find((node) => node.kind === 'verifier')!;
+  const binding = result.document.runtime.nodes[reviewer.name];
+  assert.deepEqual(binding, {
+    kind: 'agent',
+    model: 'caller-model',
+    effort: 'high',
+    lane: { harness: 'claude', provider: 'anthropic' },
+  });
+  assert.notEqual(binding.lane, source.runtime.nodes.draft.lane);
+  assert.deepEqual(result.document.runtime.nodes.draft, before.runtime.nodes.draft);
+  assert.deepEqual(source, before);
+});
+
 test('writer error stops before the reviewer; reviewer errors and exhausted budgets cannot succeed', () => {
   const result = createReviewLoop(document(), 'draft');
   const loop = findNode(result.document.graph.root, result.name)!;

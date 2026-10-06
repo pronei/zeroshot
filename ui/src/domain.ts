@@ -9,8 +9,12 @@ export type Graph = {
   policy: any;
   [key: string]: any;
 };
+// A harness and provider pair. The run-level pair is the default lane; an agent binding may
+// override it. Rust admission owns which pairs are valid.
+export type Lane = { harness: string; provider: string };
 export type Binding = {
   kind: string;
+  lane?: Lane;
   model?: string;
   effort?: string;
   sessionScope?: string;
@@ -413,6 +417,15 @@ export function wrapBody(document: Document, parent: string): { document: Docume
   return { document: replaceNode(document, parent, { ...group, body }), name };
 }
 
+function assertLane(name: string, lane: any): void {
+  if (!lane || typeof lane !== 'object' || Array.isArray(lane))
+    throw new Error(`lane for ${name} must be an object with a harness and provider.`);
+  if (typeof lane.harness !== 'string' || !lane.harness)
+    throw new Error(`lane harness for ${name} must be nonempty text.`);
+  // Like the run-level provider, a lane's provider is empty until one is chosen.
+  if (typeof lane.provider !== 'string') throw new Error(`lane provider for ${name} must be text.`);
+}
+
 function assertRuntime(value: any): void {
   if (
     !value.graph ||
@@ -438,6 +451,7 @@ function assertRuntime(value: any): void {
     for (const key of ['model', 'effort', 'sessionScope'])
       if (binding[key] !== undefined && typeof binding[key] !== 'string')
         throw new Error(`${key} for ${name} must be text.`);
+    if (binding.lane !== undefined) assertLane(name, binding.lane);
   }
 }
 
@@ -498,4 +512,52 @@ export function assertDocument(value: any): asserts value is Document {
 
 export function bindingFor(runtime: Runtime, name: string): Binding | undefined {
   return Object.hasOwn(runtime.nodes, name) ? runtime.nodes[name] : undefined;
+}
+
+/** The lane an agent node runs on: its own lane, else the run-level pair. Other kinds have none. */
+export function effectiveLane(runtime: Runtime, name: string): Lane | undefined {
+  const binding = bindingFor(runtime, name);
+  if (binding?.kind !== 'agent') return undefined;
+  const lane = binding.lane ?? runtime;
+  return { harness: lane.harness, provider: lane.provider };
+}
+
+/** Each agent node's effective lane, in graph order. */
+export function effectiveLanes(document: Document): { name: string; lane: Lane }[] {
+  return allNodes(document.graph.root).flatMap((node) => {
+    const lane = effectiveLane(document.runtime, node.name);
+    return lane ? [{ name: node.name, lane }] : [];
+  });
+}
+
+/** Whether any node binding carries its own lane. */
+export const hasNodeLanes = (runtime: Runtime) =>
+  Object.values(runtime.nodes).some((binding) => binding?.lane != null);
+
+export type RuntimeField = 'harness' | 'provider' | 'size';
+
+/**
+ * Sets one run-level field. A new harness clears the run-level provider and every node's lane;
+ * provider and size changes keep lanes.
+ */
+export function setRuntimeField(document: Document, key: RuntimeField, value: string): Document {
+  const next = clone(document);
+  const harnessChanged = key === 'harness' && value !== document.runtime.harness;
+  next.runtime[key] = value;
+  if (harnessChanged) {
+    next.runtime.provider = '';
+    for (const binding of Object.values(next.runtime.nodes)) delete binding.lane;
+  }
+  return next;
+}
+
+/** Sets an agent node's lane, or removes it so the node runs on the run-level pair. */
+export function setNodeLane(document: Document, name: string, lane: Lane | undefined): Document {
+  const next = clone(document),
+    binding = bindingFor(next.runtime, name);
+  if (binding?.kind !== 'agent')
+    throw new Error('Only an agent node can override the harness and provider.');
+  if (lane) binding.lane = clone(lane);
+  else delete binding.lane;
+  return next;
 }

@@ -8,6 +8,7 @@ import {
   bindingFor,
   children,
   clone,
+  effectiveLane,
   executable,
   labels,
   replaceNode,
@@ -18,6 +19,7 @@ import { WorkerControl } from './WorkerControl';
 import type { WorkerOption } from './workers';
 import { GuardEditor } from './GuardEditor';
 import { reviewSources } from './simple-controls';
+import { LaneFields } from './LaneFields';
 import { ModelPicker } from './ModelPicker';
 import { usePendingText } from './pending-edits';
 import { NodeDataEditor } from './NodeDataEditor';
@@ -305,6 +307,7 @@ function ActivitySettings({
   graphChange: (key: string, value: any) => void;
 }) {
   const doc = p.document;
+  const lane = effectiveLane(doc.runtime, node.name);
   const [accessError, setAccessError] = useState('');
   useEffect(() => setAccessError(''), [node]);
   const bindingChange = (key: string, value: any) => {
@@ -360,15 +363,17 @@ function ActivitySettings({
               placeholder="What should this agent do?"
             />
           </Field>
-          {binding?.kind === 'agent' && (
+          {binding?.kind === 'agent' && lane && (
             <>
+              <LaneFields document={doc} name={node.name} schema={p.schema} edit={p.edit} />
               <ModelPicker
                 label="Model"
-                harness={doc.runtime.harness}
-                provider={doc.runtime.provider}
+                harness={lane.harness}
+                provider={lane.provider}
                 value={binding.model ?? ''}
                 onChange={(value) => bindingChange('model', value)}
-                openRuntime={p.openRuntime}
+                // A node's own lane is chosen above, not in the run-level runtime settings.
+                openRuntime={binding.lane ? undefined : p.openRuntime}
               />
               <div className="field-row">
                 <Field label="Reasoning">

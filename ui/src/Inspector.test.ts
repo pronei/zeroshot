@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { findNode, type Document } from './domain';
-import { createViteTestServer } from './test-support';
+import { createViteTestServer, runtimeSchemaFixture } from './test-support';
 
 const record = (fields: Record<string, any>) => ({
   kind: 'record',
@@ -224,4 +224,42 @@ test('only agent-backed Verifiers expose supported attempt choices; imported val
       />Attempts<\/label>/
     );
   }
+});
+
+test('agent nodes choose their own lane above the model picker; delivery nodes get no lane controls', async (t) => {
+  const Inspector = await inspector(t),
+    document = fixture();
+  document.runtime.nodes.reviewer.lane = { harness: 'claude', provider: 'anthropic' };
+  const before = structuredClone(document);
+  const render = (name: string) =>
+    renderToStaticMarkup(
+      createElement(Inspector, {
+        ...props(document, name),
+        schema: runtimeSchemaFixture(),
+        openRuntime: () => {},
+      })
+    );
+  const reviewer = render('reviewer');
+  assert.match(reviewer, /<option value="claude" selected="">Claude Code<\/option>/);
+  assert.match(reviewer, /<option value="anthropic" selected="">anthropic<\/option>/);
+  assert.match(reviewer, /<option value="claude-fable-5-1">/);
+  assert.doesNotMatch(reviewer, /gpt-6-astra/);
+  assert.ok(reviewer.indexOf('>Harness</label>') < reviewer.indexOf('>Model</label>'));
+
+  const planner = render('planner');
+  assert.match(planner, /<option value="" selected="">Run default<\/option>/);
+  assert.doesNotMatch(planner, />Provider<\/label>/);
+  assert.match(planner, /<option value="gpt-6-astra">/);
+  assert.doesNotMatch(planner, /claude-fable-5-1/);
+  assert.deepEqual(document, before);
+
+  // An override's provider is chosen beside it, so only run-default nodes point at the
+  // run-level runtime settings for a missing provider.
+  document.runtime.provider = '';
+  document.runtime.nodes.reviewer.lane = { harness: 'claude', provider: '' };
+  assert.match(render('planner'), /Runtime settings/);
+  assert.doesNotMatch(render('reviewer'), /Runtime settings/);
+
+  document.runtime.nodes.reviewer = { kind: 'git_delivery' };
+  assert.doesNotMatch(render('reviewer'), /Run default|>Harness<\/label>/);
 });

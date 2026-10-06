@@ -400,6 +400,8 @@ export function createReviewLoop(
     kind: 'agent',
     model: originalRuntime.model ?? '',
     ...(originalRuntime.effort ? { effort: originalRuntime.effort } : {}),
+    // The copied model belongs to the activity's lane, so the reviewer starts on that lane too.
+    ...(originalRuntime.lane ? { lane: clone(originalRuntime.lane) } : {}),
   };
   assertDocument(next);
   return { document: next, name: loopName };

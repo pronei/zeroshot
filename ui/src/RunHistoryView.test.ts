@@ -341,3 +341,71 @@ test('preparation logs are visible before the first node and remain readable aft
     container.remove();
   }
 });
+
+test('the run overview lists each agent node runtime only when a node carries its own lane', async (t) => {
+  stubWorker(t);
+  installBrowser(t);
+  const { RunHistoryView } = await viewerModule(t);
+  const { createRoot } = await import('react-dom/client');
+  const fixture = runDetailFixture('lane-run');
+  const graph = {
+    ...fixture.graph,
+    root: {
+      kind: 'seq',
+      name: 'run',
+      children: [
+        { kind: 'step', name: 'worker', worker: 'agent.worker@1' },
+        { kind: 'verifier', name: 'review_code', worker: 'agent.reviewer@1' },
+        { kind: 'verifier', name: 'deliver', worker: 'builtin.git-delivery.pr@1' },
+      ],
+    },
+  };
+  const nodes = (lane?: { harness: string; provider: string }) => ({
+    worker: { kind: 'agent', model: 'worker-model' },
+    review_code: { kind: 'agent', model: 'review-model', ...(lane ? { lane } : {}) },
+    deliver: { kind: 'git_delivery' },
+  });
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  async function runtimeFact(key: string, runtimeNodes: ReturnType<typeof nodes>) {
+    const detail = {
+      ...fixture,
+      phase: 'admitted',
+      graph,
+      runtime: { ...fixture.runtime, nodes: runtimeNodes },
+    };
+    const source: RunHistoryReader = {
+      detail: async () => detail,
+      page: async () => completePage(),
+    };
+    await act(async () =>
+      root.render(createElement(RunHistoryView, { key, runId: detail.runId, source, workers: [] }))
+    );
+    await flushEffects();
+    const term = [...container.querySelectorAll('.run-facts dt')].find(
+      (element) => element.textContent === 'Runtime'
+    );
+    assert.ok(term?.nextElementSibling, 'the run overview shows its runtime');
+    const fact = term.nextElementSibling;
+    return {
+      text: fact.textContent,
+      lanes: [...fact.querySelectorAll('li')].map((item) => item.textContent),
+    };
+  }
+  try {
+    assert.deepEqual(await runtimeFact('default', nodes()), { text: 'codex / openai', lanes: [] });
+    const overridden = await runtimeFact(
+      'override',
+      nodes({ harness: 'claude', provider: 'anthropic' })
+    );
+    assert.match(overridden.text ?? '', /^codex \/ openai \(default\)/);
+    assert.deepEqual(overridden.lanes, [
+      'Worker: codex / openai',
+      'Review code: claude / anthropic',
+    ]);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
