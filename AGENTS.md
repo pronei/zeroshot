@@ -597,7 +597,10 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   files per writer and fresh directories per mapped item. Authors coordinate overlapping edits.
 - Runtime schemas/workers come from native contracts in `profile_ui/catalog.rs`, compiled under
   `workspace`. Git delivery keeps its fixed contracts and explicit pull-request/merge modes. Model suggestions are non-authoritative;
-  identifiers remain opaque. Missing harness/provider links to runtime settings. JSON stays lossless.
+  identifiers remain opaque. The run-level harness/provider is each agent node's default lane; the
+  inspector can override it per agent node, a new run-level harness clears every node's lane, and a
+  new provider or size keeps them. A missing harness/provider on a node using the run default links
+  to runtime settings. JSON stays lossless.
 - `native_v2_observability::history` owns admitted definitions, bounded native pages and canonical
   control records without the `ui` feature. Its exported semantic validators are the single host
   boundary for definition identity/version, canonical contiguous cursors, page/control coherence,
