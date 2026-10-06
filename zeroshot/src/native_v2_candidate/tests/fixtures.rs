@@ -9,6 +9,9 @@ pub(super) const CODEX_OPENAI: RuntimeLane = RuntimeLane::Codex {
 pub(super) const CLAUDE_ANTHROPIC: RuntimeLane = RuntimeLane::Claude {
     provider: ClaudeProvider::Anthropic,
 };
+pub(super) const COPILOT_GITHUB: RuntimeLane = RuntimeLane::Copilot {
+    provider: CopilotProvider::Github,
+};
 
 #[derive(Clone, Copy)]
 pub(super) enum RuntimePlanKind {
@@ -19,11 +22,18 @@ pub(super) enum RuntimePlanKind {
     /// Codex run-level plan whose worker runs on the run-level lane and whose added `reviewer`
     /// verifier runs on the Claude lane.
     ClaudeReviewer,
+    /// Like `ClaudeReviewer`, with the `reviewer` on the Copilot lane.
+    CopilotReviewer,
 }
 
 impl RuntimePlanKind {
-    fn has_reviewer(self) -> bool {
-        matches!(self, Self::ClaudeReviewer)
+    /// Lane of the added `reviewer` verifier, for the kinds that have one.
+    fn reviewer_lane(self) -> Option<RuntimeLane> {
+        match self {
+            Self::ClaudeReviewer => Some(CLAUDE_ANTHROPIC),
+            Self::CopilotReviewer => Some(COPILOT_GITHUB),
+            Self::Codex | Self::Claude | Self::ClaudeOverride => None,
+        }
     }
 }
 
@@ -53,9 +63,9 @@ pub(super) fn delivery_binding() -> NodeRuntimeBinding {
 
 pub(super) fn runtime(kind: RuntimePlanKind) -> RuntimePlan {
     let worker = match kind {
-        RuntimePlanKind::Codex | RuntimePlanKind::ClaudeReviewer => {
-            agent_binding(None, "gpt-5.6-sol")
-        }
+        RuntimePlanKind::Codex
+        | RuntimePlanKind::ClaudeReviewer
+        | RuntimePlanKind::CopilotReviewer => agent_binding(None, "gpt-5.6-sol"),
         RuntimePlanKind::Claude => agent_binding(None, "claude-sonnet-5"),
         RuntimePlanKind::ClaudeOverride => agent_binding(Some(CLAUDE_ANTHROPIC), "claude-sonnet-5"),
     };
@@ -69,16 +79,17 @@ pub(super) fn runtime(kind: RuntimePlanKind) -> RuntimePlan {
             delivery_binding(),
         ),
     ]);
-    if kind.has_reviewer() {
+    if let Some(lane) = kind.reviewer_lane() {
         nodes.insert(
             NodeName::new("reviewer").assert_value_with("reviewer name"),
-            agent_binding(Some(CLAUDE_ANTHROPIC), "claude-sonnet-5"),
+            agent_binding(Some(lane), "claude-sonnet-5"),
         );
     }
     match kind {
         RuntimePlanKind::Codex
         | RuntimePlanKind::ClaudeOverride
-        | RuntimePlanKind::ClaudeReviewer => RuntimePlan::Codex {
+        | RuntimePlanKind::ClaudeReviewer
+        | RuntimePlanKind::CopilotReviewer => RuntimePlan::Codex {
             provider: CodexProvider::OpenAi,
             size: RunSize::Medium,
             nodes,
@@ -139,7 +150,7 @@ pub(super) fn shipping_graph(kind: RuntimePlanKind) -> GraphSpec {
         "input":{"kind":"null"},"output":{"kind":"null"},
         "inputBindings":[],"writeBindings":[],"timeoutMs":10000,"attempts":1
     })];
-    if kind.has_reviewer() {
+    if kind.reviewer_lane().is_some() {
         children.push(json!({
             "kind":"verifier","name":"reviewer","worker":"agent.reviewer@1",
             "instructions":"Review the candidate worker.",

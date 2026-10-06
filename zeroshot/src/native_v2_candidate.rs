@@ -187,11 +187,21 @@ fn build_candidate(
     let delivery = Arc::new(
         NativeV2DeliveryAdapter::new(delivery, github).with_trusted_github_token(github_token),
     );
-    let agents = lanes
+    let agents = lane_agents(lanes, placement)?;
+    assemble_runner(admitted, agents, delivery, placement)
+}
+
+/// Builds every lane's adapter and keys it by the lane its own configuration serves. The plan is
+/// not an input, so an adapter can never be keyed by the run-level lane or paired with a plan lane
+/// by position.
+fn lane_agents(
+    lanes: Vec<NativeV2HarnessConfig>,
+    placement: CandidatePlacement,
+) -> Result<BTreeMap<RuntimeLane, CandidateAgents>, NativeV2CandidateError> {
+    lanes
         .into_iter()
         .map(|harness| Ok((harness.lane(), build_lane_agents(harness, placement)?)))
-        .collect::<Result<BTreeMap<_, _>, NativeV2CandidateError>>()?;
-    assemble_runner(admitted, agents, delivery, placement)
+        .collect()
 }
 
 /// Builds one lane's adapter: local placements run it as the invoking user, capsules as the

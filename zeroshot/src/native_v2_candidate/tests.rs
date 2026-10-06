@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
-use std::any::Any;
-use std::collections::BTreeMap;
+use std::any::{Any, TypeId};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
@@ -788,9 +788,7 @@ async fn candidate_lanes_must_be_exactly_the_admitted_effective_lanes() {
     let github = Arc::new(ScriptedGitHub::new(repository.remote.clone()));
     let config = |kind| candidate_config(kind, &repository, github.clone());
     for lane in [
-        RuntimeLane::Copilot {
-            provider: CopilotProvider::Github,
-        },
+        COPILOT_GITHUB,
         CODEX_OPENAI,
         RuntimeLane::Codex {
             provider: CodexProvider::OpenRouter,
@@ -837,6 +835,22 @@ async fn candidate_lanes_must_be_exactly_the_admitted_effective_lanes() {
         NativeV2CandidateError::WorkspaceMismatch
     );
 
+    // A Copilot lane is held to the delivery workspace and builds in both placements.
+    let copilot_reviewed = admitted(RuntimePlanKind::CopilotReviewer).await;
+    build_native_v2_candidate(&copilot_reviewed, config(RuntimePlanKind::CopilotReviewer))
+        .assert_value_with("hosted plan takes its Copilot lane");
+    build_local_native_v2_candidate(&copilot_reviewed, config(RuntimePlanKind::CopilotReviewer))
+        .assert_value_with("local plan takes its Copilot lane");
+    let mut copilot_misplaced = config(RuntimePlanKind::CopilotReviewer);
+    let Some(NativeV2HarnessConfig::Copilot(copilot)) = copilot_misplaced.lanes.first_mut() else {
+        panic!("the Copilot lane sorts first");
+    };
+    copilot.workspace = repository.root.child("different-workspace");
+    assert_eq!(
+        validate_config(&copilot_reviewed, &copilot_misplaced).assert_error(),
+        NativeV2CandidateError::WorkspaceMismatch
+    );
+
     // Lane mismatches are reported before workspace mismatches.
     let codex = admitted(RuntimePlanKind::Codex).await;
     let mut duplicated = config(RuntimePlanKind::Codex);
@@ -874,6 +888,80 @@ async fn candidate_lanes_must_be_exactly_the_admitted_effective_lanes() {
             .assert_error_with("a lane no node runs on must be refused"),
         NativeV2CandidateError::RuntimeMismatch
     );
+}
+
+#[tokio::test]
+async fn candidate_keys_each_built_adapter_by_the_lane_its_configuration_serves() {
+    let repository = TempRepository::candidate();
+    let github = Arc::new(ScriptedGitHub::new(repository.remote.clone()));
+    // Codex sessions differ in type from Claude and Copilot sessions, so in either mixed plan
+    // below a session's type tells which lane's adapter opened it.
+    let codex = harness_session_type(CODEX_OPENAI, &repository).await;
+    assert_ne!(
+        codex,
+        harness_session_type(CLAUDE_ANTHROPIC, &repository).await
+    );
+    assert_ne!(
+        codex,
+        harness_session_type(COPILOT_GITHUB, &repository).await
+    );
+
+    for kind in [
+        RuntimePlanKind::ClaudeReviewer,
+        RuntimePlanKind::CopilotReviewer,
+    ] {
+        for placement in [
+            CandidatePlacement::Capsule,
+            CandidatePlacement::Local(SessionBoundary::Run),
+        ] {
+            // The configurations arrive opposite to the plan's lane order, so pairing adapters
+            // with the plan's lanes by position would swap them.
+            let mut lanes = candidate_config(kind, &repository, github.clone()).lanes;
+            lanes.reverse();
+            let agents = lane_agents(lanes, placement).assert_value_with("lane adapters");
+            assert_eq!(
+                agents.keys().copied().collect::<BTreeSet<_>>(),
+                runtime(kind).lanes()
+            );
+            for (lane, adapter) in &agents {
+                assert_eq!(
+                    Arc::as_ptr(&adapter.driver).cast::<()>(),
+                    Arc::as_ptr(&adapter.sessions).cast::<()>(),
+                    "lane {lane} must drive and open sessions through one adapter"
+                );
+                assert_eq!(
+                    session_type(&*adapter.sessions).await,
+                    harness_session_type(*lane, &repository).await,
+                    "lane {lane} holds another lane's adapter"
+                );
+            }
+        }
+    }
+}
+
+/// Type of the sessions opened by an adapter built directly from `lane`'s fixture configuration.
+async fn harness_session_type(lane: RuntimeLane, repository: &TempRepository) -> TypeId {
+    match harness_config(lane, repository) {
+        NativeV2HarnessConfig::Copilot(config) => session_type(&CopilotAdapter::new(config)).await,
+        NativeV2HarnessConfig::Codex(config) => {
+            session_type(&NativeV2CodexAdapter::new(config)).await
+        }
+        NativeV2HarnessConfig::Claude(config) => {
+            session_type(&ClaudeAdapter::new(config).assert_value_with("Claude adapter")).await
+        }
+    }
+}
+
+/// Concrete type of the session a factory opens for an agent node.
+async fn session_type(sessions: &dyn SessionFactory) -> TypeId {
+    let request =
+        crate::native_v2_runner::test_support::request("candidate-lanes", "worker", (1, 1));
+    sessions
+        .open(&request.invocation, &request.environment)
+        .await
+        .assert_value_with("agent session")
+        .as_any()
+        .type_id()
 }
 
 #[test]
@@ -1006,8 +1094,8 @@ fn candidate_source_has_no_route_to_the_replaced_runtime_paths() {
 #[path = "tests/fixtures.rs"]
 mod fixtures;
 use fixtures::{
-    CLAUDE_ANTHROPIC, CODEX_OPENAI, RuntimePlanKind, admitted, agent_binding, candidate_config,
-    delivery_binding, harness_config, runtime, shipping_graph, wait_for_terminal,
+    CLAUDE_ANTHROPIC, CODEX_OPENAI, COPILOT_GITHUB, RuntimePlanKind, admitted, agent_binding,
+    candidate_config, delivery_binding, harness_config, runtime, shipping_graph, wait_for_terminal,
 };
 
 use openengine_cluster_testkit::assertions::{AssertError, AssertValue, JsonAt};
