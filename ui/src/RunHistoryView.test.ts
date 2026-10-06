@@ -360,10 +360,11 @@ test('the run overview lists each agent node runtime only when a node carries it
       ],
     },
   };
+  // Rust serializes bindings sorted by name, so the map order differs from the graph order.
   const nodes = (lane?: { harness: string; provider: string }) => ({
-    worker: { kind: 'agent', model: 'worker-model' },
-    review_code: { kind: 'agent', model: 'review-model', ...(lane ? { lane } : {}) },
     deliver: { kind: 'git_delivery' },
+    review_code: { kind: 'agent', model: 'review-model', ...(lane ? { lane } : {}) },
+    worker: { kind: 'agent', model: 'worker-model' },
   });
   const container = document.createElement('div');
   document.body.append(container);
@@ -401,8 +402,8 @@ test('the run overview lists each agent node runtime only when a node carries it
     );
     assert.match(overridden.text ?? '', /^codex \/ openai \(default\)/);
     assert.deepEqual(overridden.lanes, [
-      'Worker: codex / openai',
-      'Review code: claude / anthropic',
+      'Worker: codex / openai · worker-model',
+      'Review code: claude / anthropic · review-model',
     ]);
   } finally {
     await act(async () => root.unmount());

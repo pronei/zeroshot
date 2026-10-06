@@ -69,17 +69,21 @@ test('an agent node runs on its own lane, else the run-level pair; delivery node
 });
 
 test('a new run-level harness clears the provider and every lane; other fields stay', () => {
-  const document = fixture(),
-    before = structuredClone(document);
-  const next = setRuntimeField(document, 'harness', 'claude');
-  assert.equal(next.runtime.harness, 'claude');
-  assert.equal(next.runtime.provider, '');
-  for (const name of ['worker', 'reviewer', 'deliver']) assert.equal(hasLane(next, name), false);
-  const reviewer = structuredClone(before.runtime.nodes.reviewer);
-  delete reviewer.lane;
-  assert.deepEqual(next.runtime.nodes, { ...before.runtime.nodes, reviewer });
+  // Two lanes on different harnesses: each new harness matches one lane and crosses the other.
+  const document = fixture();
+  document.runtime.nodes.worker.lane = { harness: 'copilot', provider: 'github' };
+  const before = structuredClone(document);
+  const withoutAnyLane = structuredClone(before.runtime.nodes);
+  for (const binding of Object.values(withoutAnyLane)) delete binding.lane;
+  for (const harness of ['claude', 'copilot']) {
+    const next = setRuntimeField(document, 'harness', harness);
+    assert.equal(next.runtime.harness, harness);
+    assert.equal(next.runtime.provider, '');
+    for (const name of ['worker', 'reviewer', 'deliver']) assert.equal(hasLane(next, name), false);
+    assert.deepEqual(next.runtime.nodes, withoutAnyLane);
+    assertDocument(next);
+  }
   assert.deepEqual(document, before);
-  assertDocument(next);
   // Choosing the current harness again is not a change.
   assert.deepEqual(setRuntimeField(document, 'harness', 'codex'), document);
 });
@@ -191,7 +195,11 @@ test('profile validation accepts a lane only as an object with a harness and tex
 test('history lists every agent node lane in graph order only when a node carries one', () => {
   assert.equal(hasNodeLanes(fixture().runtime), true);
   assert.equal(hasNodeLanes(withoutLanes().runtime), false);
-  assert.deepEqual(effectiveLanes(fixture()), [
+  // Rust serializes bindings sorted by name, so the map order differs from the graph order.
+  const document = fixture();
+  const { worker, reviewer, deliver } = document.runtime.nodes;
+  document.runtime.nodes = { deliver, reviewer, worker };
+  assert.deepEqual(effectiveLanes(document), [
     { name: 'worker', lane: { harness: 'codex', provider: 'openai' } },
     { name: 'reviewer', lane: { harness: 'claude', provider: 'anthropic' } },
   ]);

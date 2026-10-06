@@ -21,6 +21,7 @@ import { RecordedValue } from './RecordedValue';
 import { Transcript } from './Transcript';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import {
+  bindingFor,
   effectiveLanes,
   findNode,
   hasNodeLanes,
@@ -1001,11 +1002,15 @@ function RunInspector({
                   <>
                     {' (default)'}
                     <ul className="run-lanes" aria-label="Runtime per node">
-                      {effectiveLanes(document).map(({ name, lane }) => (
-                        <li key={name}>
-                          {humanize(name)}: {lane.harness} / {lane.provider}
-                        </li>
-                      ))}
+                      {effectiveLanes(document).map(({ name, lane }) => {
+                        const model = bindingFor(document.runtime, name)?.model;
+                        return (
+                          <li key={name}>
+                            {humanize(name)}: {lane.harness} / {lane.provider}
+                            {model ? ` · ${model}` : ''}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </>
                 )}

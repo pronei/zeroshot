@@ -177,21 +177,28 @@ test('run-level harness edits clear node lanes while provider and size edits kee
   const [harness, provider, size] = elements(view).filter((element) => element.type === 'select');
   provider.props.onChange({ target: { value: 'openrouter' } });
   size.props.onChange({ target: { value: 'large' } });
+  // A switch to the reviewer's own harness and a switch to an unrelated one both clear its lane.
   harness.props.onChange({ target: { value: 'claude' } });
+  harness.props.onChange({ target: { value: 'copilot' } });
   assert.deepEqual(
     edits.map(({ key }) => key),
-    ['runtime.provider', 'runtime.size', 'runtime.harness']
+    ['runtime.provider', 'runtime.size', 'runtime.harness', 'runtime.harness']
   );
-  const [providerEdit, sizeEdit, harnessEdit] = edits.map(({ next }) => next);
+  const [providerEdit, sizeEdit, ...harnessEdits] = edits.map(({ next }) => next);
   assert.equal(providerEdit.runtime.provider, 'openrouter');
   assert.deepEqual(providerEdit.runtime.nodes, before.runtime.nodes);
   assert.equal(sizeEdit.runtime.size, 'large');
   assert.deepEqual(sizeEdit.runtime.nodes, before.runtime.nodes);
-  assert.equal(harnessEdit.runtime.harness, 'claude');
-  assert.equal(harnessEdit.runtime.provider, '');
-  assert.equal(Object.hasOwn(harnessEdit.runtime.nodes.reviewer, 'lane'), false);
-  assert.equal(harnessEdit.runtime.nodes.reviewer.model, 'review-model');
-  assert.deepEqual(harnessEdit.runtime.nodes.worker, before.runtime.nodes.worker);
-  for (const edit of [providerEdit, sizeEdit, harnessEdit]) assertDocument(edit);
+  assert.deepEqual(
+    harnessEdits.map(({ runtime }) => runtime.harness),
+    ['claude', 'copilot']
+  );
+  for (const harnessEdit of harnessEdits) {
+    assert.equal(harnessEdit.runtime.provider, '');
+    assert.equal(Object.hasOwn(harnessEdit.runtime.nodes.reviewer, 'lane'), false);
+    assert.equal(harnessEdit.runtime.nodes.reviewer.model, 'review-model');
+    assert.deepEqual(harnessEdit.runtime.nodes.worker, before.runtime.nodes.worker);
+  }
+  for (const { next } of edits) assertDocument(next);
   assert.deepEqual(doc, before);
 });
