@@ -16,13 +16,14 @@ machine-readable contract.
 
 | Field      | Value                                                                              |
 | ---------- | ---------------------------------------------------------------------------------- |
-| `harness`  | `codex`, `claude`, or `copilot`                                                    |
-| `provider` | A provider supported by the selected harness                                       |
+| `harness`  | Harness of the default lane: `codex`, `claude`, or `copilot`                       |
+| `provider` | Provider of the default lane, supported by the selected harness                    |
 | `size`     | `small`, `medium`, or `large`                                                      |
 | `nodes`    | Object mapping each executable graph node name to a [node binding](#node-bindings) |
 
-One harness, provider, and size apply to the whole run. Model, effort, session scope, and
-connections are chosen per node.
+`harness` and `provider` form the default lane. Every agent node runs on it unless its binding
+carries its own [`lane`](#per-node-lanes). `size` applies to the whole run. Model, effort, session
+scope, and connections are chosen per node.
 
 `size` is a run-level resource class. Zeroshot records it with the run and reports it in run
 status; the hosting target decides what resources each class receives.
@@ -55,7 +56,8 @@ This plan binds the four agent nodes of the built-in `software-change` template:
 | `claude`  | `anthropic`, `openrouter`, `bedrock`, `gateway` |
 | `copilot` | `github`                                        |
 
-Any other pair is rejected when the plan is read.
+The same pairs apply to an agent node's [`lane`](#per-node-lanes). Any other pair is rejected when
+the plan is read.
 
 ## Node bindings
 
@@ -66,6 +68,7 @@ Any other pair is rejected when the plan is read.
 | Field          | Required | Value                                                              |
 | -------------- | -------- | ------------------------------------------------------------------ |
 | `kind`         | Yes      | `agent`                                                            |
+| `lane`         | No       | [Harness and provider](#per-node-lanes); default lane when omitted |
 | `model`        | Yes      | Provider-owned model identifier, 1 to 2,048 non-control characters |
 | `effort`       | No       | `low`, `medium`, `high`, `xhigh`, or `max`; unset when omitted     |
 | `sessionScope` | No       | `execution` (default) or `node_instance`                           |
@@ -92,8 +95,8 @@ replacement session silently.
 | `connections`         | No       | [Connection declarations](#connections); empty when omitted |
 | `pullRequestFeedback` | No       | `consider` (default) or `ignore`                            |
 
-A `git_delivery` binding has no model, effort, or session scope. Admission accepts it only on a
-`verifier` node whose worker is one of the built-in delivery workers:
+A `git_delivery` binding has no model, effort, session scope, or lane. Admission accepts it only on
+a `verifier` node whose worker is one of the built-in delivery workers:
 
 | Worker                         | Accepts `pullRequestFeedback: ignore` |
 | ------------------------------ | ------------------------------------- |
@@ -114,6 +117,79 @@ may require exactly one delivery node; Zeroshot Cloud quick runs require one. Se
 [concurrent workspace changes](../concepts/execution.md#concurrent-workspace-changes).
 
 `ignore` skips pull-request discussion. CI, conflict, freshness, and merge-policy checks still apply.
+
+## Per-node lanes
+
+A lane is one harness and provider pair. The plan's `harness` and `provider` are the default lane
+for every agent node, and an `agent` binding can carry its own `lane`. A node's effective lane is
+its `lane`, or the default lane when it has none. `size` stays run-level.
+
+This plan binds the same four nodes as the [first example](#document-fields). `worker` and
+`review_repair` run on the default `codex`/`openai` lane, and both reviewers run on Claude Code:
+
+```json
+{
+  "harness": "codex",
+  "provider": "openai",
+  "size": "medium",
+  "nodes": {
+    "worker": { "kind": "agent", "model": "PROVIDER_MODEL_ID", "sessionScope": "node_instance" },
+    "acceptance": {
+      "kind": "agent",
+      "lane": { "harness": "claude", "provider": "anthropic" },
+      "model": "PROVIDER_MODEL_ID",
+      "effort": "high"
+    },
+    "code": {
+      "kind": "agent",
+      "lane": { "harness": "claude", "provider": "anthropic" },
+      "model": "PROVIDER_MODEL_ID",
+      "effort": "high"
+    },
+    "review_repair": { "kind": "agent", "model": "PROVIDER_MODEL_ID" }
+  }
+}
+```
+
+Each `model` goes to the provider of its node's effective lane, so here `worker` and
+`review_repair` need OpenAI model identifiers and the reviewers need Anthropic ones.
+
+- `lane` accepts the same pairs as the run level, listed in
+  [Harness and provider](#harness-and-provider). An invalid pair is rejected when the plan is read.
+- A `git_delivery` binding cannot carry a `lane`.
+- A `lane` equal to the run-level pair is accepted and behaves like no `lane`.
+
+Zeroshot starts one harness adapter for each distinct effective lane, and each node runs on its own
+lane's CLI. Model, effort, session scope, and connections stay per node. Provider access defaults
+also come from each node's effective lane; see [Connections](#connections).
+
+### Target support
+
+Targets that support lanes advertise `openengine.node-runtime-lanes/v1` in their discovery
+document. Before the CLI submits a run or stores a profile on a target, it checks the plan. If any
+node carries a `lane` and the target does not advertise the capability, the CLI fails before sending
+the plan, with this error:
+
+```text
+target does not support per-node runtime lanes (openengine.node-runtime-lanes/v1)
+```
+
+Plans without a `lane` are unchanged on the wire and work with every target. Older Zeroshot
+binaries reject a plan that contains a `lane` field when they read it.
+
+### Local runs
+
+Before the controller starts, a local `zeroshot run` or `zeroshot resume` checks that each lane's
+executable, `codex`, `claude`, or `copilot`, is on `PATH`. A missing executable fails the command
+with a message such as:
+
+```text
+lane claude/anthropic needs the `claude` executable on PATH
+```
+
+The check does not inspect login state; a missing login surfaces at that lane's first turn. Local
+lanes reuse each harness's native login, exactly as single-lane runs do. `zeroshot acp` runs the
+same check at startup.
 
 ## Coverage
 
@@ -154,10 +230,12 @@ The per-run limit also counts the connection fields and variable names of an att
 environment. Each connection value must be 1 byte to 64 KiB with no NUL. The static connection
 values supplied for one run, counting each key and field name with its value, must fit in 256 KiB.
 
-When a node omits `connections`, Zeroshot derives provider access for the execution placement.
-Local native logins need no declaration; contained targets and non-native providers receive the
-canonical requirements listed in
+When a node omits `connections`, Zeroshot derives provider access from that node's
+[effective lane](#per-node-lanes) for the execution placement. Local native logins need no
+declaration; contained targets and non-native providers receive the canonical requirements listed in
 [Runtimes and connections](../concepts/runtimes-and-connections.md#runtime-configuration-contains-names-not-secret-values).
+A run's connection requirements are the union over its nodes, so a plan that mixes lanes can require
+the fields of several providers.
 
 ## Uniform runtime configuration
 
@@ -175,6 +253,10 @@ canonical requirements listed in
 
 Every executable node gets an `agent` binding with these values, except nodes that use a delivery
 worker. Those get a `git_delivery` binding that declares `{"github": ["GH_TOKEN"]}`.
+
+A uniform configuration applies one lane to every agent node. Neither `--uniform-runtime-config` nor
+the Python SDK's `UniformRuntime` can express [per-node lanes](#per-node-lanes); use an exact
+`--runtime-config` or an opaque `RuntimePlan` instead.
 
 ## Template delivery bindings
 
