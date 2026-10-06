@@ -69,11 +69,15 @@ with `npm i -g @the-open-engine-company/zeroshot` or build `zeroshot` with Cargo
   access is derived per node from its effective lane, and connection requirements are the union
   over nodes. Targets advertise `openengine.node-runtime-lanes/v1`. The CLI refuses to submit or
   store a lane-bearing plan on a target without that exact marker kind, after discovery and before
-  acquiring an access token, so no request body is sent; an absent or different marker never fails
-  discovery. Local `run`/`resume` and `zeroshot acp` check every lane's executable on the captured
-  search path before launch, report a missing one as a usage error, and never probe login state.
-  The lookup is `find_executable`: Windows spawning uses it directly, and elsewhere it follows the
-  OS search that spawning relies on.
+  acquiring an access token, so no request body is sent. An absent marker, or one of a different
+  kind, never fails discovery, but a marker object with extra fields does. The marker stays exactly
+  `{"kind": ...}`: later capability data, such as which harnesses a target can run, gets its own new
+  extension key, because older clients ignore unknown extension keys but reject unknown fields
+  inside a marker. `TargetDiscoveryExtensions` must keep ignoring unknown keys. Local `run`/`resume`
+  and `zeroshot acp` check every lane's executable on the captured search path before launch,
+  report a missing one as a usage error, and never probe login state. The lookup is
+  `find_executable`: Windows spawning uses it directly, and elsewhere it follows the OS search that
+  spawning relies on.
 - The `gateway` provider resolves `GATEWAY_BASE_URL` and `GATEWAY_API_KEY` through named
   connections. Codex uses Responses with bearer authentication; Claude uses Messages with
   `x-api-key`. Preserve caller-owned base paths and model identifiers without protocol detection.

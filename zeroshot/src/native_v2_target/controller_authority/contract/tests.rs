@@ -99,4 +99,18 @@ fn controller_descriptor_reads_node_runtime_lanes_from_the_exact_kind_only() {
     let other_kind =
         build_controller_descriptor(&origin, other_kind, TargetAuthentication::None).assert_value();
     assert!(!other_kind.node_runtime_lanes);
+
+    // A newer target's discovery, read from the wire: an unknown extension key beside a marker of
+    // another kind still builds a descriptor, which reports lanes as unsupported.
+    let mut newer =
+        serde_json::to_value(TargetDiscoveryDocument::direct(TargetAuthentication::None))
+            .assert_value();
+    newer["extensions"] = serde_json::json!({
+        "future_capability": {"kind": "openengine.future/v1", "detail": true},
+        "node_runtime_lanes": {"kind": "openengine.node-runtime-lanes/v2"}
+    });
+    let newer = serde_json::from_value::<TargetDiscoveryDocument>(newer).assert_value();
+    let newer =
+        build_controller_descriptor(&origin, newer, TargetAuthentication::None).assert_value();
+    assert!(!newer.node_runtime_lanes);
 }

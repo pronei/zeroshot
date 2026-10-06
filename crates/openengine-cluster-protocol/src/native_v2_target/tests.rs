@@ -87,6 +87,32 @@ fn discovery_serialized_without_node_runtime_lanes_reads_back_without_the_marker
     }
 }
 
+/// Older clients must keep parsing discovery from newer targets. New capability data therefore
+/// goes under new extension keys, which the extensions map ignores, while the strict marker's
+/// shape stays frozen at exactly `{"kind": ...}`.
+#[test]
+fn discovery_ignores_unknown_extension_keys_but_rejects_extra_marker_fields() {
+    let mut wire =
+        serde_json::to_value(TargetDiscoveryDocument::direct(TargetAuthentication::None))
+            .assert_value();
+    wire["extensions"] = serde_json::json!({
+        "future_capability": {"kind": "openengine.future/v1", "detail": true},
+        "node_runtime_lanes": {"kind": "openengine.node-runtime-lanes/v2"}
+    });
+    let decoded = serde_json::from_value::<TargetDiscoveryDocument>(wire.clone()).assert_value();
+    assert_eq!(
+        decoded
+            .extensions
+            .node_runtime_lanes
+            .as_ref()
+            .map(|marker| marker.kind.as_str()),
+        Some("openengine.node-runtime-lanes/v2")
+    );
+
+    wire["extensions"]["node_runtime_lanes"]["harnesses"] = serde_json::json!(["codex"]);
+    assert!(serde_json::from_value::<TargetDiscoveryDocument>(wire).is_err());
+}
+
 #[test]
 fn node_runtime_lanes_marker_alone_makes_extensions_non_empty() {
     assert!(TargetDiscoveryExtensions::default().is_empty());

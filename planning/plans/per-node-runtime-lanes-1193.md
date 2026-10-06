@@ -166,6 +166,15 @@ with `skip_serializing_if = "Option::is_none"`. Targets built from this change a
 it. Cloud is a hosted target behind the same discovery document, so it is covered once it serves
 the marker and is refused cleanly until then.
 
+The marker's shape is frozen at exactly `{"kind": ...}`. Like its sibling markers it denies unknown
+fields, so a marker object with an extra field fails the whole discovery document for every client
+that reads it. A later capability that needs data, for example which harnesses a target can run,
+gets its own new extension key instead: `TargetDiscoveryExtensions` ignores unknown keys, so older
+clients keep parsing discovery, and that map must keep ignoring them. This follows the precedent of
+hosted workspace recovery, which got its own extension rather than changing the strict hosted-runs
+object. An absent marker, or one of a different kind, never fails discovery: a plan with lanes is
+refused and a plan without lanes works.
+
 ### Client check
 
 `RuntimePlan::has_lane_overrides` reports whether a plan carries any per-node lane. It lives in the
