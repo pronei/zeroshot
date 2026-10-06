@@ -233,6 +233,11 @@ fn node_edits_through_nodes_mut_are_visible_through_nodes() {
     assert_eq!(plan.lane(), CODEX_OPENAI);
     assert_eq!(effective_lane_of(&plan, "worker"), Some(CLAUDE_ANTHROPIC));
     assert!(plan.has_lane_overrides());
+    // No agent runs on the run-level lane any more, so `lanes()` leaves it out.
+    assert_eq!(
+        plan.lanes().into_iter().collect::<Vec<_>>(),
+        [CLAUDE_ANTHROPIC]
+    );
 }
 
 #[test]
