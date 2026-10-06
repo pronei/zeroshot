@@ -42,6 +42,64 @@ fn supported_non_hosted_target_discovery_advertises_workspace_recovery() {
 }
 
 #[test]
+fn every_authentication_mode_can_advertise_node_runtime_lanes() {
+    assert_eq!(NODE_RUNTIME_LANES_KIND, "openengine.node-runtime-lanes/v1");
+    for authentication in [
+        TargetAuthentication::None,
+        TargetAuthentication::PrivateCapability,
+        TargetAuthentication::HostedOauth,
+    ] {
+        let direct = TargetDiscoveryDocument::direct(authentication);
+        assert!(direct.extensions.node_runtime_lanes.is_none());
+
+        let document = direct.with_node_runtime_lanes();
+        assert_eq!(
+            document
+                .extensions
+                .node_runtime_lanes
+                .as_ref()
+                .map(|capability| capability.kind.as_str()),
+            Some(NODE_RUNTIME_LANES_KIND)
+        );
+        let value = serde_json::to_value(&document).assert_value();
+        assert_eq!(
+            value["extensions"]["node_runtime_lanes"],
+            serde_json::json!({ "kind": "openengine.node-runtime-lanes/v1" })
+        );
+        assert_eq!(
+            serde_json::from_value::<TargetDiscoveryDocument>(value).assert_value(),
+            document
+        );
+    }
+}
+
+#[test]
+fn discovery_serialized_without_node_runtime_lanes_reads_back_without_the_marker() {
+    for document in [
+        TargetDiscoveryDocument::direct(TargetAuthentication::None),
+        TargetDiscoveryDocument::direct(TargetAuthentication::None).with_workspace_recovery(),
+    ] {
+        let value = serde_json::to_value(&document).assert_value();
+        assert!(value.pointer("/extensions/node_runtime_lanes").is_none());
+        let decoded = serde_json::from_value::<TargetDiscoveryDocument>(value).assert_value();
+        assert!(decoded.extensions.node_runtime_lanes.is_none());
+        assert_eq!(decoded, document);
+    }
+}
+
+#[test]
+fn node_runtime_lanes_marker_alone_makes_extensions_non_empty() {
+    assert!(TargetDiscoveryExtensions::default().is_empty());
+    let extensions = TargetDiscoveryExtensions {
+        node_runtime_lanes: Some(TargetNodeRuntimeLanesDiscovery {
+            kind: NODE_RUNTIME_LANES_KIND.to_owned(),
+        }),
+        ..TargetDiscoveryExtensions::default()
+    };
+    assert!(!extensions.is_empty());
+}
+
+#[test]
 fn run_history_discovery_uses_the_versioned_camel_case_wire_shape() {
     let document = TargetDiscoveryDocument::direct(TargetAuthentication::None).with_run_history(
         TargetRunHistoryDiscovery {

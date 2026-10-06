@@ -11,6 +11,7 @@ pub(super) enum RuntimePlanKind {
 
 pub(super) fn runtime(kind: RuntimePlanKind) -> RuntimePlan {
     let agent = NodeRuntimeBinding::Agent {
+        lane: None,
         model: worker_catalog::ModelId::new(match kind {
             RuntimePlanKind::Codex => "gpt-5.6-sol",
             RuntimePlanKind::Claude => "claude-sonnet-5",

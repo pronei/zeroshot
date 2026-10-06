@@ -3384,6 +3384,17 @@
               "const": "agent",
               "type": "string"
             },
+            "lane": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RuntimeLane"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Harness and provider for this node, overriding the run-level pair. Omitted means the\nnode runs on the run-level lane."
+            },
             "model": {
               "maxLength": 2048,
               "minLength": 1,
@@ -4762,6 +4773,68 @@
         }
       },
       "type": "object"
+    },
+    "RuntimeLane": {
+      "description": "One harness and provider pair: the run-level default, or an agent node's override.\n\nThe wire form is an object tagged by `harness`, such as\n`{\"harness\":\"claude\",\"provider\":\"anthropic\"}`. Each harness accepts only its own providers, so\nan incompatible pair such as `codex` with `anthropic` is rejected.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The GitHub Copilot CLI harness.",
+          "properties": {
+            "harness": {
+              "const": "copilot",
+              "type": "string"
+            },
+            "provider": {
+              "$ref": "#/$defs/CopilotProvider",
+              "description": "Provider that serves this lane's models."
+            }
+          },
+          "required": [
+            "harness",
+            "provider"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The Codex CLI harness.",
+          "properties": {
+            "harness": {
+              "const": "codex",
+              "type": "string"
+            },
+            "provider": {
+              "$ref": "#/$defs/CodexProvider",
+              "description": "Provider that serves this lane's models."
+            }
+          },
+          "required": [
+            "harness",
+            "provider"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The Claude Code harness.",
+          "properties": {
+            "harness": {
+              "const": "claude",
+              "type": "string"
+            },
+            "provider": {
+              "$ref": "#/$defs/ClaudeProvider",
+              "description": "Provider that serves this lane's models."
+            }
+          },
+          "required": [
+            "harness",
+            "provider"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "RuntimePlan": {
       "oneOf": [

@@ -9,7 +9,7 @@ use crate::{ConnectionKey, EnvironmentVariableName};
 
 use super::{
     MAX_DECLARED_CONNECTIONS, MAX_DECLARED_ENVIRONMENT_NAMES, NativeV2RunValueError,
-    ReasoningEffort, SessionScope,
+    ReasoningEffort, RuntimeLane, SessionScope,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
@@ -210,6 +210,10 @@ impl PullRequestFeedback {
 #[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
 pub enum NodeRuntimeBinding {
     Agent {
+        /// Harness and provider for this node, overriding the run-level pair. Omitted means the
+        /// node runs on the run-level lane.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lane: Option<RuntimeLane>,
         model: super::ModelId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<ReasoningEffort>,

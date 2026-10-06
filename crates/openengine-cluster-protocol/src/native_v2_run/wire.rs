@@ -11,6 +11,7 @@ use crate::{
 
 use super::{
     ClaudeProvider, CodexProvider, CopilotProvider, NodeRuntimeBinding, RunSize, ResolvedSource,
+    RuntimeLane,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -50,6 +51,67 @@ impl RuntimePlan {
             | Self::Codex { nodes, .. }
             | Self::Claude { nodes, .. } => nodes,
         }
+    }
+
+    /// Mutable node bindings. The run-level lane and size are not reachable through this view.
+    #[must_use]
+    pub fn nodes_mut(&mut self) -> &mut BTreeMap<NodeName, NodeRuntimeBinding> {
+        match self {
+            Self::Copilot { nodes, .. }
+            | Self::Codex { nodes, .. }
+            | Self::Claude { nodes, .. } => nodes,
+        }
+    }
+
+    /// The run-level harness and provider: the default lane of every agent node.
+    #[must_use]
+    pub const fn lane(&self) -> RuntimeLane {
+        match self {
+            Self::Copilot { provider, .. } => RuntimeLane::Copilot {
+                provider: *provider,
+            },
+            Self::Codex { provider, .. } => RuntimeLane::Codex {
+                provider: *provider,
+            },
+            Self::Claude { provider, .. } => RuntimeLane::Claude {
+                provider: *provider,
+            },
+        }
+    }
+
+    /// The lane that runs `binding`: the binding's own lane when it carries one, else the
+    /// run-level lane. Git delivery bindings run no harness and have no lane.
+    #[must_use]
+    pub const fn effective_lane(&self, binding: &NodeRuntimeBinding) -> Option<RuntimeLane> {
+        match binding {
+            NodeRuntimeBinding::Agent {
+                lane: Some(lane), ..
+            } => Some(*lane),
+            NodeRuntimeBinding::Agent { lane: None, .. } => Some(self.lane()),
+            NodeRuntimeBinding::GitDelivery { .. } => None,
+        }
+    }
+
+    /// Distinct effective lanes of the agent bindings, ordered by harness (Copilot, Codex, Claude)
+    /// and then by provider declaration order. A plan without agent bindings has none.
+    #[must_use]
+    pub fn lanes(&self) -> BTreeSet<RuntimeLane> {
+        self.nodes()
+            .values()
+            .filter_map(|binding| self.effective_lane(binding))
+            .collect()
+    }
+
+    /// Whether any agent binding carries its own `lane`, even one equal to the run-level lane.
+    ///
+    /// Readers built before per-node lanes reject the `lane` field whatever its value, so a plan
+    /// that reports `true` can only go to a target that advertises
+    /// `openengine.node-runtime-lanes/v1`.
+    #[must_use]
+    pub fn has_lane_overrides(&self) -> bool {
+        self.nodes()
+            .values()
+            .any(|binding| matches!(binding, NodeRuntimeBinding::Agent { lane: Some(_), .. }))
     }
 
     /// Union of the fields required from each connection key across all executable nodes.

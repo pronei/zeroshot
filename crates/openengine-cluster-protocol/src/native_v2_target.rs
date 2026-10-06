@@ -445,6 +445,18 @@ pub struct TargetWorkspaceRecoveryDiscovery {
     pub kind: String,
 }
 
+/// Discovery kind of a target that admits agent bindings carrying their own runtime `lane`.
+pub const NODE_RUNTIME_LANES_KIND: &str = "openengine.node-runtime-lanes/v1";
+
+/// Marker that a target admits per-node runtime lanes. Clients send a plan with any agent `lane`
+/// only to a target that advertises it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetNodeRuntimeLanesDiscovery {
+    /// Capability version; [`NODE_RUNTIME_LANES_KIND`] for this contract.
+    pub kind: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, rename_all = "snake_case")]
 pub struct TargetDiscoveryExtensions {
@@ -464,6 +476,9 @@ pub struct TargetDiscoveryExtensions {
     pub workspace_checkpoints: Option<TargetWorkspaceCheckpointsDiscovery>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hosted_workspace_recovery: Option<TargetHostedWorkspaceRecoveryDiscovery>,
+    /// Present when the target admits agent bindings that carry their own runtime lane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_runtime_lanes: Option<TargetNodeRuntimeLanesDiscovery>,
 }
 
 /// One discovery document for direct Docker targets and OAuth-hosted targets.
@@ -497,6 +512,7 @@ impl TargetDiscoveryExtensions {
             && self.workspace_recovery.is_none()
             && self.workspace_checkpoints.is_none()
             && self.hosted_workspace_recovery.is_none()
+            && self.node_runtime_lanes.is_none()
     }
 }
 
@@ -540,6 +556,16 @@ impl TargetDiscoveryDocument {
                 kind: WORKSPACE_RECOVERY_KIND.to_owned(),
             });
         }
+        self
+    }
+
+    /// Advertises per-node runtime lanes. Unlike workspace recovery, every authentication mode
+    /// supports them, hosted OAuth targets included.
+    #[must_use]
+    pub fn with_node_runtime_lanes(mut self) -> Self {
+        self.extensions.node_runtime_lanes = Some(TargetNodeRuntimeLanesDiscovery {
+            kind: NODE_RUNTIME_LANES_KIND.to_owned(),
+        });
         self
     }
 
