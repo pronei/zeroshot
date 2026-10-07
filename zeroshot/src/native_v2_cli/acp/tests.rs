@@ -193,6 +193,7 @@ fn acp_profile(runtime: RuntimePlan) -> RunProfile {
 
 fn runtime(harness: &str, scope: &str, connections: Value) -> RuntimePlan {
     let binding = NodeRuntimeBinding::Agent {
+        lane: None,
         model: ModelId::new("provider-model").assert_value(),
         effort: None,
         session_scope: match scope {

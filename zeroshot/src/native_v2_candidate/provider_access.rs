@@ -42,7 +42,7 @@ pub(crate) fn materialize_provider_access(
     placement: ProviderAccessPlacement,
 ) -> Result<(), NativeV2RunValueError> {
     let contract = provider_access_contract(runtime);
-    for binding in runtime_nodes_mut(runtime).values_mut() {
+    for binding in runtime.nodes_mut().values_mut() {
         materialize_binding(binding, contract, placement)?;
     }
     Ok(())
@@ -121,16 +121,6 @@ fn claude_contract(provider: ClaudeProvider) -> ProviderAccessContract {
             &["AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION"],
             &[&["AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION"]],
         ),
-    }
-}
-
-fn runtime_nodes_mut(
-    runtime: &mut RuntimePlan,
-) -> &mut BTreeMap<openengine_cluster_protocol::NodeName, NodeRuntimeBinding> {
-    match runtime {
-        RuntimePlan::Copilot { nodes, .. }
-        | RuntimePlan::Codex { nodes, .. }
-        | RuntimePlan::Claude { nodes, .. } => nodes,
     }
 }
 
