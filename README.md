@@ -37,7 +37,7 @@ zeroshot runs a QA process your coding agent can't skip. You define it as a grap
 review, what must pass, where a rejection loops back. In the built-in `software-change` workflow,
 one agent implements, independent agents review, and failures go back to a bounded repair loop.
 Git delivery waits for both reviewers to accept. zeroshot doesn't replace Claude Code, Codex or
-Copilot. It runs one of them as the worker and as the reviewers.
+Copilot. It runs one of them as the worker and as the reviewers, or a different one for each.
 
 Use the built-in graph or draw your own: code review, your own reviewers and test agents, any model
 per node. Save the setup as a profile for the next task.
