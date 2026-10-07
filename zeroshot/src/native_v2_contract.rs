@@ -2,9 +2,7 @@
 //!
 //! `GraphSpec` remains the graph language. This module only binds executable graph leaves to
 //! harness/provider lanes and defines the neutral values exchanged by admission, the reducer, the
-//! runner, and the run ledger. The run-level harness/provider pair is the default lane, and an
-//! agent node's binding may override it with its own lane. It deliberately contains no admission
-//! or execution policy.
+//! runner, and the run ledger. It deliberately contains no admission or execution policy.
 
 use std::fmt;
 use std::marker::PhantomData;
