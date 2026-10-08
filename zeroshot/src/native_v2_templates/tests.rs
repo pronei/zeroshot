@@ -410,8 +410,19 @@ fn assert_research_bootstrap(root: &GraphNode) {
             && value
                 .as_str()
                 .contains("checkpoint before the unfinished work or audit")
+            && value
+                .as_str()
+                .contains("Bootstrap must not create 'iterations/NNNNNN/'")
+            && value.as_str().contains(
+                "Do not mark a current provisional iteration in state or summary before preflight",
+            )
+            && value
+                .as_str()
+                .contains("The loop creates that provisional directory")
             && value.as_str().contains("exactly one experiment work item")
-            && value.as_str().contains("rejects missing")
+            && value
+                .as_str()
+                .contains("planner excludes invalid scout outputs")
     }));
 }
 
