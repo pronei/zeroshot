@@ -331,10 +331,7 @@ fn windows_find_executable_tries_only_the_fixed_suffixes() {
         find_executable("harness", &path(&shim), root.as_path()),
         Some(shim.join("harness.cmd"))
     );
-    assert_eq!(
-        find_executable("harness", &path(&bare), root.as_path()),
-        None
-    );
+    assert_eq!(windows_search("harness", &path(&bare)), None);
     assert_eq!(
         executable("harness", &path(&shim)),
         shim.join("harness.cmd")
@@ -342,5 +339,63 @@ fn windows_find_executable_tries_only_the_fixed_suffixes() {
     assert_eq!(
         executable("harness", &path(&bare)),
         std::path::PathBuf::from("harness")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_find_executable_preserves_rusts_adjacent_executable_fallback() {
+    use std::collections::BTreeMap;
+
+    let root = TemporaryDirectory::for_test("find-executable-adjacent");
+    let current = std::env::current_exe().unwrap();
+    let name = format!(
+        "zeroshot-fallback-{}",
+        root.as_path().file_name().unwrap().to_string_lossy()
+    );
+    let adjacent = current.parent().unwrap().join(format!("{name}.exe"));
+    // RAII removes the copied binary even if an assertion fails.
+    struct Adjacent(std::path::PathBuf);
+    impl Drop for Adjacent {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+    let fixture = Adjacent(adjacent);
+    fs::copy(&current, &fixture.0).unwrap();
+    let environment = BTreeMap::from([("PATH".to_owned(), String::new())]);
+    assert_eq!(
+        find_executable(&name, &environment, root.as_path()),
+        Some(fixture.0.clone())
+    );
+    let output = std::process::Command::new(executable(&name, &environment))
+        .env_clear()
+        .envs(environment)
+        .current_dir(root.as_path())
+        .arg("--list")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_find_executable_preserves_rusts_system_directory_fallback() {
+    use std::collections::BTreeMap;
+
+    let root = TemporaryDirectory::for_test("find-executable-system");
+    let environment = BTreeMap::from([("PATH".to_owned(), String::new())]);
+    let executable = find_executable("cmd", &environment, root.as_path()).unwrap();
+    assert_eq!(
+        executable
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_lowercase(),
+        "cmd.exe"
     );
 }

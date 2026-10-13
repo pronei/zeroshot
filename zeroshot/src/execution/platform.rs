@@ -21,7 +21,8 @@ pub(crate) use native::validate_private_file;
 
 pub(crate) use native::{
     ControllerChild, FileIdentity, commit_file, create_private_directory, file_identity,
-    open_directory, open_identity, open_readonly_file, private_directory, spawn_controller,
+    guard_controller_console, open_directory, open_identity, open_readonly_file, private_directory,
+    spawn_controller,
 };
 
 #[derive(Clone, Copy)]
@@ -114,7 +115,7 @@ pub(crate) fn find_executable(
     #[cfg(windows)]
     {
         let _ = working_directory;
-        windows_search(program, environment)
+        windows_search(program, environment).or_else(|| windows_spawn_fallback(program))
     }
     #[cfg(not(windows))]
     {
@@ -167,6 +168,49 @@ fn windows_search(
         }
     }
     None
+}
+
+/// Rust's bare-program fallback after the authored PATH misses: the current executable's
+/// directory, the system and Windows directories, then the parent process PATH. Only .exe is added.
+#[cfg(windows)]
+fn windows_spawn_fallback(program: &str) -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::System::SystemInformation::{GetSystemDirectoryW, GetWindowsDirectoryW};
+
+    fn system_directory(
+        read: unsafe extern "system" fn(*mut u16, u32) -> u32,
+    ) -> Option<std::path::PathBuf> {
+        let mut buffer = vec![0_u16; 32_768];
+        let length = unsafe { read(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
+        (length > 0 && length < buffer.len())
+            .then(|| std::ffi::OsString::from_wide(&buffer[..length]).into())
+    }
+
+    let path = Path::new(program);
+    if path.components().count() != 1 {
+        return None;
+    }
+    let mut name = path.as_os_str().to_owned();
+    if path.extension().is_none() {
+        name.push(".exe");
+    }
+    let mut directories: Vec<_> = [
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf)),
+        system_directory(GetSystemDirectoryW),
+        system_directory(GetWindowsDirectoryW),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if let Some(path) = std::env::var_os("PATH") {
+        directories.extend(std::env::split_paths(&path));
+    }
+    directories
+        .into_iter()
+        .map(|directory| directory.join(&name))
+        .find(|candidate| candidate.is_file())
 }
 
 #[cfg(not(windows))]

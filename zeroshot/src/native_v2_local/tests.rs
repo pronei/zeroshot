@@ -1,4 +1,6 @@
-use openengine_cluster_testkit::assertions::{AssertError, AssertValue};
+#[cfg(unix)]
+use openengine_cluster_testkit::assertions::AssertError;
+use openengine_cluster_testkit::assertions::AssertValue;
 use serde_json::{Value, json};
 
 use super::*;
@@ -448,6 +450,8 @@ fn lane_executables_pass_when_every_lane_finds_its_executable() {
     check_lane_executables(&mixed_lane_plan(), &environment, root.path()).assert_value();
 }
 
+// Only Unix restricts lookup to the captured PATH; Windows retains native fallback searches.
+#[cfg(unix)]
 #[test]
 fn a_missing_lane_executable_names_the_first_such_lane_and_its_executable() {
     let root = TestDirectory::new("lane-executables-missing");
