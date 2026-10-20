@@ -16,6 +16,7 @@ import {
   type Edge,
   type EdgeProps,
   type Viewport,
+  type XYPosition,
 } from '@xyflow/react';
 import {
   Plus,
@@ -64,6 +65,7 @@ import {
   type WorkflowObservation,
 } from './workflow-observation';
 export type { WorkflowNodeObservation, WorkflowObservation } from './workflow-observation';
+import { anchoredViewport, workflowGroupNodeId } from './workflow-viewport';
 import type { CanvasView } from './run-view-state';
 import './workflow.css';
 
@@ -540,13 +542,14 @@ export function WorkflowCanvas(p: {
   inspectorHidden: boolean;
   showInspector: () => void;
 }) {
-  const { fitView, setCenter, setViewport } = useReactFlow();
+  const { fitView, setCenter, setViewport, getViewport, getNode } = useReactFlow();
   const readOnly = !!p.observation;
   const contextKey = p.observation?.key ?? p.document.name;
   const { collapsed, setCollapsed, initialViewport, moved } = useCanvasView(p, readOnly);
   const [error, setError] = useState('');
   const layoutRevision = useRef(0);
   const lastFocus = useRef<number | undefined>(undefined);
+  const anchor = useRef<{ owner: string; position: XYPosition } | undefined>(undefined);
   const projection = useMemo(
     () => compactWorkflow(projectWorkflow(p.document, collapsed)),
     [p.document, collapsed]
@@ -586,10 +589,18 @@ export function WorkflowCanvas(p: {
     })
   );
   const currentPositions = { ...layoutPositions, ...savedPositions, ...dragPositions };
+  // Toggling one group keeps the user's view: remember where the group is drawn now.
+  function anchorGroup(name: string) {
+    const id = workflowGroupNodeId(projection, name);
+    const position = id ? getNode(id)?.position : undefined;
+    anchor.current = position && { owner: name, position };
+  }
   function collapse(name: string) {
+    anchorGroup(name);
     setCollapsed((value) => new Set(value).add(name));
   }
   function expand(name: string) {
+    anchorGroup(name);
     setCollapsed((value) => {
       const next = new Set(value);
       next.delete(name);
@@ -614,12 +625,19 @@ export function WorkflowCanvas(p: {
       setError('');
       const restore = initialViewport.current;
       initialViewport.current = undefined;
+      const kept = anchor.current;
+      anchor.current = undefined;
       if (restore || reset || !focusRef.current || lastFocus.current === focusRef.current.tick)
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             if (revision !== layoutRevision.current) return;
             if (restore) void setViewport(restore);
-            else void fitView({ padding: 0.12, maxZoom: 0.9, duration: 180 });
+            else if (kept && !reset) {
+              const id = workflowGroupNodeId(projection, kept.owner);
+              const position = id && getNode(id)?.position;
+              if (position)
+                void setViewport(anchoredViewport(getViewport(), kept.position, position));
+            } else void fitView({ padding: 0.12, maxZoom: 0.9, duration: 180 });
           })
         );
     } catch (cause) {
@@ -638,6 +656,7 @@ export function WorkflowCanvas(p: {
     );
     setDragPositions({});
     lastFocus.current = undefined;
+    anchor.current = undefined;
   }, [contextKey, readOnly]);
   useEffect(() => {
     void layout();
@@ -746,7 +765,10 @@ export function WorkflowCanvas(p: {
         p={p}
         readOnly={readOnly}
         selectedNode={selectedNode}
-        collapseAll={() => setCollapsed(collapsedWorkflowGroups(p.document.graph.root))}
+        collapseAll={() => {
+          anchor.current = undefined;
+          setCollapsed(collapsedWorkflowGroups(p.document.graph.root));
+        }}
         arrange={() => void layout(true)}
       />
       <div className={`flow ${layoutBusy ? 'workflow-arranging' : ''}`}>
