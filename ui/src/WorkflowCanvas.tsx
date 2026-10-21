@@ -65,7 +65,7 @@ import {
   type WorkflowObservation,
 } from './workflow-observation';
 export type { WorkflowNodeObservation, WorkflowObservation } from './workflow-observation';
-import { anchoredViewport, workflowGroupNodeId } from './workflow-viewport';
+import { anchoredViewport, workflowGroupEntryId, workflowGroupNodeId } from './workflow-viewport';
 import type { CanvasView } from './run-view-state';
 import './workflow.css';
 
@@ -549,7 +549,10 @@ export function WorkflowCanvas(p: {
   const [error, setError] = useState('');
   const layoutRevision = useRef(0);
   const lastFocus = useRef<number | undefined>(undefined);
-  const anchor = useRef<{ owner: string; position: XYPosition } | undefined>(undefined);
+  const anchor = useRef<
+    | { owner: string; position: XYPosition; entry?: { id: string; position: XYPosition } }
+    | undefined
+  >(undefined);
   const projection = useMemo(
     () => compactWorkflow(projectWorkflow(p.document, collapsed)),
     [p.document, collapsed]
@@ -589,11 +592,18 @@ export function WorkflowCanvas(p: {
     })
   );
   const currentPositions = { ...layoutPositions, ...savedPositions, ...dragPositions };
-  // Toggling one group keeps the user's view: remember where the group is drawn now.
+  // Toggling one group keeps the user's view: remember where the group is drawn now, and the
+  // node before it, which an expanded choice may hang its outcomes on instead of its own node.
   function anchorGroup(name: string) {
     const id = workflowGroupNodeId(projection, name);
     const position = id ? getNode(id)?.position : undefined;
-    anchor.current = position && { owner: name, position };
+    const entryId = workflowGroupEntryId(projection, name);
+    const entry = entryId ? getNode(entryId)?.position : undefined;
+    anchor.current = position && {
+      owner: name,
+      position,
+      entry: entryId && entry ? { id: entryId, position: entry } : undefined,
+    };
   }
   function collapse(name: string) {
     anchorGroup(name);
@@ -634,9 +644,10 @@ export function WorkflowCanvas(p: {
             if (restore) void setViewport(restore);
             else if (kept && !reset) {
               const id = workflowGroupNodeId(projection, kept.owner);
-              const position = id && getNode(id)?.position;
-              if (position)
-                void setViewport(anchoredViewport(getViewport(), kept.position, position));
+              const [before, after] = id
+                ? [kept.position, getNode(id)?.position]
+                : [kept.entry?.position, kept.entry ? getNode(kept.entry.id)?.position : undefined];
+              if (before && after) void setViewport(anchoredViewport(getViewport(), before, after));
             } else void fitView({ padding: 0.12, maxZoom: 0.9, duration: 180 });
           })
         );

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { Document, GraphNode } from './domain';
 import { compactWorkflow } from './workflow-display';
 import { projectWorkflow } from './workflow-projection';
-import { anchoredViewport, workflowGroupNodeId } from './workflow-viewport';
+import { anchoredViewport, workflowGroupEntryId, workflowGroupNodeId } from './workflow-viewport';
 
 const root: GraphNode = {
   kind: 'seq',
@@ -28,6 +28,54 @@ test('a group is its collapsed card, then its region once expanded', () => {
   assert.equal(region?.owner, 'rounds');
   assert.equal(workflowGroupNodeId(open, 'prepare'), undefined);
   assert.equal(workflowGroupNodeId(open, 'missing'), undefined);
+});
+
+const routeAfter = (preceding: GraphNode) => {
+  const root: GraphNode = {
+    kind: 'seq',
+    name: 'run',
+    children: [
+      preceding,
+      {
+        kind: 'choice',
+        name: 'route',
+        branches: [
+          {
+            when: {
+              kind: 'in',
+              value: { name: 'triage', source: 'signal', field: 'route' },
+              labels: ['simple'],
+            },
+            node: { kind: 'step', name: 'answer' },
+          },
+        ],
+        otherwise: { kind: 'step', name: 'escalate' },
+      },
+    ],
+  };
+  return { graph: { root } } as Document;
+};
+
+test('an expanded choice is its decision node', () => {
+  const open = compactWorkflow(projectWorkflow(routeAfter({ kind: 'step', name: 'triage' })));
+  const decision = open.nodes.find((node) => node.id === workflowGroupNodeId(open, 'route'));
+  assert.equal(decision?.role, 'decision');
+  assert.equal(decision?.owner, 'route');
+});
+
+test('a choice attached to its verifier keeps that verifier as the anchor', () => {
+  const routed = routeAfter({
+    kind: 'verifier',
+    name: 'triage',
+    signals: { route: ['simple', 'complex'] },
+  });
+  const folded = compactWorkflow(projectWorkflow(routed, new Set(['route'])));
+  const entry = workflowGroupEntryId(folded, 'route');
+  assert.equal(folded.nodes.find((node) => node.id === entry)?.owner, 'triage');
+  // Expanded, the choice has no node of its own; its outcomes start at that same verifier.
+  const open = compactWorkflow(projectWorkflow(routed));
+  assert.equal(workflowGroupNodeId(open, 'route'), undefined);
+  assert.ok(open.edges.some((edge) => edge.owner === 'route' && edge.source === entry));
 });
 
 test('the anchor keeps its screen position and the zoom stays', () => {
