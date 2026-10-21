@@ -65,7 +65,12 @@ import {
   type WorkflowObservation,
 } from './workflow-observation';
 export type { WorkflowNodeObservation, WorkflowObservation } from './workflow-observation';
-import { anchoredViewport, workflowGroupEntryId, workflowGroupNodeId } from './workflow-viewport';
+import {
+  anchoredViewport,
+  workflowGroupEntryId,
+  workflowGroupMemberIds,
+  workflowGroupNodeId,
+} from './workflow-viewport';
 import type { CanvasView } from './run-view-state';
 import './workflow.css';
 
@@ -542,7 +547,7 @@ export function WorkflowCanvas(p: {
   inspectorHidden: boolean;
   showInspector: () => void;
 }) {
-  const { fitView, setCenter, setViewport, getViewport, getNode } = useReactFlow();
+  const { fitView, setCenter, setViewport, getViewport, getNode, getNodesBounds } = useReactFlow();
   const readOnly = !!p.observation;
   const contextKey = p.observation?.key ?? p.document.name;
   const { collapsed, setCollapsed, initialViewport, moved } = useCanvasView(p, readOnly);
@@ -550,7 +555,12 @@ export function WorkflowCanvas(p: {
   const layoutRevision = useRef(0);
   const lastFocus = useRef<number | undefined>(undefined);
   const anchor = useRef<
-    | { owner: string; position: XYPosition; entry?: { id: string; position: XYPosition } }
+    | {
+        owner: string;
+        expanded: boolean;
+        position: XYPosition;
+        entry?: { id: string; position: XYPosition };
+      }
     | undefined
   >(undefined);
   const projection = useMemo(
@@ -592,25 +602,26 @@ export function WorkflowCanvas(p: {
     })
   );
   const currentPositions = { ...layoutPositions, ...savedPositions, ...dragPositions };
-  // Toggling one group keeps the user's view: remember where the group is drawn now, and the
+  // Toggling one group keeps the user's zoom: remember where the group is drawn now, and the
   // node before it, which an expanded choice may hang its outcomes on instead of its own node.
-  function anchorGroup(name: string) {
+  function anchorGroup(name: string, expanded: boolean) {
     const id = workflowGroupNodeId(projection, name);
     const position = id ? getNode(id)?.position : undefined;
     const entryId = workflowGroupEntryId(projection, name);
     const entry = entryId ? getNode(entryId)?.position : undefined;
     anchor.current = position && {
       owner: name,
+      expanded,
       position,
       entry: entryId && entry ? { id: entryId, position: entry } : undefined,
     };
   }
   function collapse(name: string) {
-    anchorGroup(name);
+    anchorGroup(name, false);
     setCollapsed((value) => new Set(value).add(name));
   }
   function expand(name: string) {
-    anchorGroup(name);
+    anchorGroup(name, true);
     setCollapsed((value) => {
       const next = new Set(value);
       next.delete(name);
@@ -643,11 +654,24 @@ export function WorkflowCanvas(p: {
             if (revision !== layoutRevision.current) return;
             if (restore) void setViewport(restore);
             else if (kept && !reset) {
+              // An expanded group moves to the middle of the view; a collapsed one stays put.
+              const members = kept.expanded
+                ? workflowGroupMemberIds(projection, p.document.graph.root, kept.owner).filter(
+                    (member) => getNode(member)
+                  )
+                : [];
               const id = workflowGroupNodeId(projection, kept.owner);
               const [before, after] = id
                 ? [kept.position, getNode(id)?.position]
                 : [kept.entry?.position, kept.entry ? getNode(kept.entry.id)?.position : undefined];
-              if (before && after) void setViewport(anchoredViewport(getViewport(), before, after));
+              if (members.length) {
+                const box = getNodesBounds(members);
+                void setCenter(box.x + box.width / 2, box.y + box.height / 2, {
+                  zoom: getViewport().zoom,
+                  duration: 220,
+                });
+              } else if (before && after)
+                void setViewport(anchoredViewport(getViewport(), before, after));
             } else void fitView({ padding: 0.12, maxZoom: 0.9, duration: 180 });
           })
         );
