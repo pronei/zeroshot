@@ -2,7 +2,12 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { act, createElement } from 'react';
-import { ReactFlowProvider, type Viewport, type XYPosition } from '@xyflow/react';
+import {
+  ReactFlowProvider,
+  getViewportForBounds,
+  type Viewport,
+  type XYPosition,
+} from '@xyflow/react';
 import { JSDOM } from 'jsdom';
 import type { GraphNode } from './domain';
 import { createViteTestServer, installTestGlobals, runDetailFixture } from './test-support';
@@ -114,7 +119,10 @@ class ScaleMatrix {
 }
 
 /** An 800 × 600 page where React Flow measures its nodes and ELK lays them out. */
-function installCanvasBrowser(worker: unknown) {
+function installCanvasBrowser(
+  worker: unknown,
+  frames?: (callback: FrameRequestCallback) => number
+) {
   const dom = new JSDOM(
     '<!doctype html><style>.react-flow__pane { z-index: 1; }</style><div id="root"></div>',
     { pretendToBeVisual: true, url: 'https://example.test/' }
@@ -149,7 +157,7 @@ function installCanvasBrowser(worker: unknown) {
     HTMLElement: dom.window.HTMLElement,
     SVGElement: dom.window.SVGElement,
     Node: dom.window.Node,
-    requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window),
+    requestAnimationFrame: frames ?? dom.window.requestAnimationFrame.bind(dom.window),
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     ResizeObserver: MeasuringObserver,
@@ -166,8 +174,12 @@ function installCanvasBrowser(worker: unknown) {
 }
 
 /** Mounts the run graph from the saved view and waits for its first layout. */
-async function mountRunGraph(t: TestContext, layouts: ReturnType<typeof layoutWorker>) {
-  const { container, restore } = installCanvasBrowser(layouts.Worker);
+async function mountRunGraph(
+  t: TestContext,
+  layouts: ReturnType<typeof layoutWorker>,
+  frames?: (callback: FrameRequestCallback) => number
+) {
+  const { container, restore } = installCanvasBrowser(layouts.Worker, frames);
   let unmount = async () => {};
   t.after(async () => {
     await unmount();
@@ -257,28 +269,60 @@ const onScreen = (point: XYPosition, view: Viewport) => ({
   y: Math.round((point.y * view.zoom + view.y) * 10) / 10,
 });
 
-test('expanding a group centres it and collapsing keeps its card in place, at the same zoom', async (t) => {
-  const container = await mountRunGraph(t, layoutWorker());
-  assert.deepEqual(viewport(container), saved.viewport);
+/** The graph-space bounds of everything drawn. */
+function drawnBounds(container: HTMLElement) {
+  const boxes = [...container.querySelectorAll<HTMLElement>('.react-flow__node')].map(box);
+  const x = Math.min(...boxes.map((drawn) => drawn.x));
+  const y = Math.min(...boxes.map((drawn) => drawn.y));
+  return {
+    x,
+    y,
+    width: Math.max(...boxes.map((drawn) => drawn.x + drawn.width)) - x,
+    height: Math.max(...boxes.map((drawn) => drawn.y + drawn.height)) - y,
+  };
+}
+/** The view the canvas fits the whole graph into, with its padding and zoom limits. */
+const fitted = (container: HTMLElement) =>
+  getViewportForBounds(drawnBounds(container), canvas.width, canvas.height, 0.15, 0.9, 0.12);
+const rounded = (view: Viewport) => ({
+  x: Math.round(view.x * 10) / 10,
+  y: Math.round(view.y * 10) / 10,
+  zoom: Math.round(view.zoom * 1000) / 1000,
+});
 
+/** Expands `rounds` and checks its region appears where its card was, at the same zoom. */
+async function expandInPlace(container: HTMLElement) {
+  const before = viewport(container);
+  const card = onScreen(box(nodeWith(container, 'Expand rounds')), before);
   await click(container, 'Expand rounds');
   await settle(container);
-  const expanded = viewport(container);
-  const region = box(nodeWith(container, 'Collapse rounds'));
-  assert.equal(expanded.zoom, saved.viewport.zoom);
-  assert.deepEqual(
-    onScreen({ x: region.x + region.width / 2, y: region.y + region.height / 2 }, expanded),
-    { x: canvas.width / 2, y: canvas.height / 2 }
-  );
+  const after = viewport(container);
+  assert.equal(after.zoom, before.zoom);
+  assert.deepEqual(onScreen(box(nodeWith(container, 'Collapse rounds')), after), card);
+}
 
+test('expanding and collapsing a group keep it where it was on screen, at the same zoom', async (t) => {
+  const container = await mountRunGraph(t, layoutWorker());
+  assert.deepEqual(viewport(container), saved.viewport);
+  await expandInPlace(container);
+
+  const expanded = viewport(container);
+  const region = onScreen(box(nodeWith(container, 'Collapse rounds')), expanded);
   await click(container, 'Collapse rounds');
   await settle(container);
   const collapsed = viewport(container);
   assert.equal(collapsed.zoom, saved.viewport.zoom);
-  assert.deepEqual(
-    onScreen(box(nodeWith(container, 'Expand rounds')), collapsed),
-    onScreen(region, expanded)
-  );
+  assert.deepEqual(onScreen(box(nodeWith(container, 'Expand rounds')), collapsed), region);
+});
+
+test('placing a toggled group does not wait on frames that may beat the drawn layout', async (t) => {
+  // Frames that fire before React has drawn the new layout: the worst case of the race in a browser.
+  const early = (callback: FrameRequestCallback) => {
+    queueMicrotask(() => callback(performance.now()));
+    return 0;
+  };
+  const container = await mountRunGraph(t, layoutWorker(), early);
+  await expandInPlace(container);
 });
 
 test('collapsing all groups while an expand is still laying out fits the whole graph', async (t) => {
@@ -306,4 +350,19 @@ test('collapsing all groups while an expand is still laying out fits the whole g
       `${node.dataset.id} is outside the view: ${JSON.stringify({ topLeft, bottomRight, view })}`
     );
   }
+});
+
+test('fitting the view while an expand is still laying out fits the finished layout', async (t) => {
+  const layouts = layoutWorker();
+  const container = await mountRunGraph(t, layouts);
+
+  layouts.hold();
+  await click(container, 'Expand rounds');
+  assert.equal(layouts.waiting(), 1, 'the expand is laying out');
+  await click(container, 'Fit workflow');
+  layouts.release();
+  await settle(container);
+
+  assert.ok(nodeWith(container, 'Collapse rounds'), 'the group is expanded');
+  assert.deepEqual(rounded(viewport(container)), rounded(fitted(container)));
 });

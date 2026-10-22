@@ -3,12 +3,7 @@ import assert from 'node:assert/strict';
 import type { Document, GraphNode } from './domain';
 import { compactWorkflow } from './workflow-display';
 import { projectWorkflow } from './workflow-projection';
-import {
-  anchoredViewport,
-  workflowGroupEntryId,
-  workflowGroupMemberIds,
-  workflowGroupNodeId,
-} from './workflow-viewport';
+import { anchoredViewport, workflowGroupEntryId, workflowGroupNodeId } from './workflow-viewport';
 
 const root: GraphNode = {
   kind: 'seq',
@@ -81,28 +76,6 @@ test('a choice attached to its verifier keeps that verifier as the anchor', () =
   const open = compactWorkflow(projectWorkflow(routed));
   assert.equal(workflowGroupNodeId(open, 'route'), undefined);
   assert.ok(open.edges.some((edge) => edge.owner === 'route' && edge.source === entry));
-});
-
-test('an expanded group is its region and everything drawn inside it', () => {
-  assert.deepEqual(workflowGroupMemberIds(project([]), root, 'rounds'), [
-    'workflow:region:%22rounds%22:loop',
-    'workflow:node:%22write%22:activity',
-    'workflow:virtual:%22rounds%22:loop-end',
-  ]);
-});
-
-test('an expanded choice is its outcomes, not the verifier they hang off', () => {
-  const routed = routeAfter({
-    kind: 'verifier',
-    name: 'triage',
-    signals: { route: ['simple', 'complex'] },
-  });
-  const open = compactWorkflow(projectWorkflow(routed));
-  const members = workflowGroupMemberIds(open, routed.graph.root, 'route');
-  assert.deepEqual(
-    members.map((id) => open.nodes.find((node) => node.id === id)?.owner),
-    ['answer', 'escalate']
-  );
 });
 
 test('the anchor keeps its screen position and the zoom stays', () => {

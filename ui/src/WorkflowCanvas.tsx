@@ -65,12 +65,7 @@ import {
   type WorkflowObservation,
 } from './workflow-observation';
 export type { WorkflowNodeObservation, WorkflowObservation } from './workflow-observation';
-import {
-  anchoredViewport,
-  workflowGroupEntryId,
-  workflowGroupMemberIds,
-  workflowGroupNodeId,
-} from './workflow-viewport';
+import { anchoredViewport, workflowGroupEntryId, workflowGroupNodeId } from './workflow-viewport';
 import type { CanvasView } from './run-view-state';
 import './workflow.css';
 
@@ -548,6 +543,7 @@ export function WorkflowCanvas(p: {
   showInspector: () => void;
 }) {
   const { fitView, setCenter, setViewport } = useReactFlow();
+  const fitGraph = () => void fitView({ padding: 0.12, maxZoom: 0.9, duration: 180 });
   const readOnly = !!p.observation;
   const contextKey = p.observation?.key ?? p.document.name;
   const { collapsed, setCollapsed, initialViewport, moved } = useCanvasView(p, readOnly);
@@ -612,14 +608,15 @@ export function WorkflowCanvas(p: {
       setError('');
       const restore = initialViewport.current;
       initialViewport.current = undefined;
-      const placeGroup = groups.take();
-      if (restore || reset || !focusRef.current || lastFocus.current === focusRef.current.tick)
+      const focusing = !!focusRef.current && lastFocus.current !== focusRef.current.tick;
+      if (restore || reset || focusing) groups.forget();
+      // A toggled group is placed by the effect on the layout state, once this layout is drawn.
+      if (!groups.armed() && (restore || reset || !focusing))
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             if (revision !== layoutRevision.current) return;
             if (restore) void setViewport(restore);
-            else if (placeGroup && !reset) placeGroup();
-            else void fitView({ padding: 0.12, maxZoom: 0.9, duration: 180 });
+            else fitGraph();
           })
         );
     } catch (cause) {
@@ -737,6 +734,8 @@ export function WorkflowCanvas(p: {
     )
   );
   const edges = workflowEdges(projection, boxes, activities, dims, readOnly, p);
+  groups.track([...regions, ...activities]);
+  useEffect(() => groups.settle(fitGraph), [layoutPositions, layoutRegions]);
   const selectedNode = p.inspectorHidden ? undefined : findNode(p.document.graph.root, p.selected);
   return (
     <section
@@ -803,7 +802,7 @@ export function WorkflowCanvas(p: {
           }}
         >
           <Background gap={24} size={1} color="var(--grid)" />
-          <Controls showInteractive={false} />
+          <Controls showInteractive={false} onFitView={groups.fit} />
         </ReactFlow>
         {error && (
           <div className="canvas-error" role="alert">
@@ -841,56 +840,42 @@ function useCanvasView(p: Parameters<typeof WorkflowCanvas>[0], readOnly: boolea
 
 type GroupAnchor = {
   owner: string;
-  expanded: boolean;
   position: XYPosition;
   entry?: { id: string; position: XYPosition };
+  /** The user asked for a fit meanwhile: the finished layout is fitted instead. */
+  fit?: boolean;
 };
 
 // Toggling one group keeps the user's zoom: remember where the group is drawn now, and the
 // node before it, which an expanded choice may hang its outcomes on instead of its own node.
+// The group is then placed from where the canvas draws the new layout, never from React Flow's
+// store, which learns a layout only after a render and may still hold temporary positions.
 function useGroupToggles(
   projection: ReturnType<typeof compactWorkflow>,
   root: GraphNode,
   setCollapsed: Dispatch<SetStateAction<Set<string>>>
 ) {
-  const { setCenter, setViewport, getViewport, getNode, getNodesBounds } = useReactFlow();
+  const { setViewport, getViewport } = useReactFlow();
   const anchor = useRef<GroupAnchor | undefined>(undefined);
-  function remember(name: string, expanded: boolean) {
+  const drawn = useRef<Record<string, XYPosition>>({});
+  function remember(name: string) {
     const id = workflowGroupNodeId(projection, name);
-    const position = id ? getNode(id)?.position : undefined;
+    const position = id ? drawn.current[id] : undefined;
     const entryId = workflowGroupEntryId(projection, name);
-    const entry = entryId ? getNode(entryId)?.position : undefined;
+    const entry = entryId ? drawn.current[entryId] : undefined;
     anchor.current = position && {
       owner: name,
-      expanded,
       position,
       entry: entryId && entry ? { id: entryId, position: entry } : undefined,
     };
   }
-  // An expanded group moves to the middle of the view; a collapsed one stays put.
-  function place(kept: GroupAnchor) {
-    const members = kept.expanded
-      ? workflowGroupMemberIds(projection, root, kept.owner).filter((member) => getNode(member))
-      : [];
-    const id = workflowGroupNodeId(projection, kept.owner);
-    const [before, after] = id
-      ? [kept.position, getNode(id)?.position]
-      : [kept.entry?.position, kept.entry ? getNode(kept.entry.id)?.position : undefined];
-    if (members.length) {
-      const box = getNodesBounds(members);
-      void setCenter(box.x + box.width / 2, box.y + box.height / 2, {
-        zoom: getViewport().zoom,
-        duration: 220,
-      });
-    } else if (before && after) void setViewport(anchoredViewport(getViewport(), before, after));
-  }
   return {
     collapse(name: string) {
-      remember(name, false);
+      remember(name);
       setCollapsed((value) => new Set(value).add(name));
     },
     expand(name: string) {
-      remember(name, true);
+      remember(name);
       setCollapsed((value) => {
         const next = new Set(value);
         next.delete(name);
@@ -904,11 +889,27 @@ function useGroupToggles(
     forget() {
       anchor.current = undefined;
     },
-    /** Takes the pending toggle for a layout: placing the view once that layout is drawn. */
-    take() {
+    /** Whether a toggle is still waiting for its layout to be drawn. */
+    armed: () => anchor.current !== undefined,
+    /** The user asked for a fit: a pending toggle fits the finished layout instead of anchoring. */
+    fit() {
+      if (anchor.current) anchor.current = { ...anchor.current, fit: true };
+    },
+    /** Records where every canvas node is drawn in this render. */
+    track(nodes: readonly Node[]) {
+      drawn.current = Object.fromEntries(nodes.map((node) => [node.id, node.position]));
+    },
+    /** Places the pending toggle now that its layout is drawn, or fits the graph if asked to. */
+    settle(fit: () => void) {
       const kept = anchor.current;
       anchor.current = undefined;
-      return kept && (() => place(kept));
+      if (!kept) return;
+      if (kept.fit) return fit();
+      const id = workflowGroupNodeId(projection, kept.owner);
+      const [before, after] = id
+        ? [kept.position, drawn.current[id]]
+        : [kept.entry?.position, kept.entry && drawn.current[kept.entry.id]];
+      if (before && after) void setViewport(anchoredViewport(getViewport(), before, after));
     },
   };
 }
