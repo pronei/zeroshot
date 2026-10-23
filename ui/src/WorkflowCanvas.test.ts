@@ -227,6 +227,7 @@ async function mountRunGraph(
   const reactRoot = createRoot(container);
   unmount = () => act(async () => reactRoot.unmount());
   const detail = runDetailFixture();
+  const view = options.view ?? saved;
   const document = {
     name: detail.runId,
     graph: { ...detail.graph, root: options.root ?? root },
@@ -245,14 +246,16 @@ async function mountRunGraph(
           workers: [],
           select: () => {},
           observation: options.readOnly === false ? undefined : { key: detail.runId, nodes: {} },
-          view: options.view ?? saved,
+          view,
           inspectorHidden: false,
           showInspector: () => {},
         })
       )
     )
   );
-  await settle(container);
+  await settle(container, () =>
+    matchesViewport(container, view.viewport ?? fitted(container, options.size ?? canvas))
+  );
   return container;
 }
 
@@ -261,8 +264,8 @@ const transform = (container: HTMLElement) =>
 const numbers = (pattern: RegExp, text: string) =>
   (pattern.exec(text) ?? assert.fail(`no match in "${text}"`)).slice(1).map(Number);
 
-/** Waits until the layout is done and the view has stopped moving. */
-async function settle(container: HTMLElement) {
+/** Wait for the requested view as well as layout completion and a quiet viewport. */
+async function settle(container: HTMLElement, ready: () => boolean = () => true) {
   let last = transform(container);
   let quietSince = Date.now();
   for (const deadline = Date.now() + 5_000; Date.now() < deadline;) {
@@ -270,12 +273,12 @@ async function settle(container: HTMLElement) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     const current = transform(container);
-    if (container.querySelector('.workflow-arranging') || current !== last) {
+    if (container.querySelector('.workflow-arranging') || current !== last || !ready()) {
       last = current;
       quietSince = Date.now();
     } else if (Date.now() - quietSince >= 150) return;
   }
-  assert.fail('the canvas kept laying out or moving');
+  assert.fail('the canvas did not reach a settled view');
 }
 
 async function click(container: HTMLElement, label: string) {
@@ -326,6 +329,12 @@ const rounded = (view: Viewport) => ({
   zoom: Math.round(view.zoom * 1000) / 1000,
 });
 
+const matchesViewport = (container: HTMLElement, expected: Viewport) => {
+  const actual = rounded(viewport(container));
+  const target = rounded(expected);
+  return actual.x === target.x && actual.y === target.y && actual.zoom === target.zoom;
+};
+
 /** Expands `rounds` and checks its region appears where its card was, at the same zoom. */
 async function expandInPlace(container: HTMLElement) {
   const before = viewport(container);
@@ -370,7 +379,7 @@ test('collapsing all groups while an expand is still laying out fits the whole g
   assert.equal(layouts.waiting(), 1, 'the expand is laying out');
   await click(container, 'Collapse all groups');
   layouts.release();
-  await settle(container);
+  await settle(container, () => matchesViewport(container, fitted(container)));
 
   assert.ok(nodeWith(container, 'Expand rounds'), 'every group is collapsed again');
   const view = viewport(container);
@@ -397,7 +406,7 @@ test('fitting the view while an expand is still laying out fits the finished lay
   assert.equal(layouts.waiting(), 1, 'the expand is laying out');
   await click(container, 'Fit workflow');
   layouts.release();
-  await settle(container);
+  await settle(container, () => matchesViewport(container, fitted(container)));
 
   assert.ok(nodeWith(container, 'Collapse rounds'), 'the group is expanded');
   assert.deepEqual(rounded(viewport(container)), rounded(fitted(container)));
@@ -449,7 +458,7 @@ for (const branches of [4, 6]) {
       measurements.hold();
       await click(container, 'Fit workflow');
       layouts.release();
-      await settle(container);
+      await settle(container, () => matchesViewport(container, fitted(container, size)));
 
       assert.ok(measurements.waiting() > 0, 'the completed layout still has stale measurements');
       assert.deepEqual(rounded(viewport(container)), rounded(fitted(container, size)));
@@ -468,8 +477,23 @@ for (const branches of [4, 6]) {
       );
 
       await act(async () => measurements.release());
-      await settle(container);
+      await settle(container, () => matchesViewport(container, fitted(container, size)));
       assert.deepEqual(rounded(viewport(container)), rounded(fitted(container, size)));
     });
   }
 }
+
+test('saved view and Collapse all complete even when animation frames are delayed', async (t) => {
+  const late = (callback: FrameRequestCallback) =>
+    setTimeout(() => callback(performance.now()), 250) as unknown as number;
+  const layouts = layoutWorker();
+  const container = await mountRunGraph(t, layouts, late);
+  assert.deepEqual(viewport(container), saved.viewport);
+
+  layouts.hold();
+  await click(container, 'Expand rounds');
+  await click(container, 'Collapse all groups');
+  layouts.release();
+  await settle(container, () => matchesViewport(container, fitted(container)));
+  assert.deepEqual(rounded(viewport(container)), rounded(fitted(container)));
+});
