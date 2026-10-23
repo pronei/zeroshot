@@ -10,6 +10,7 @@ import {
 } from '@xyflow/react';
 import { JSDOM } from 'jsdom';
 import type { GraphNode } from './domain';
+import type { CanvasView } from './run-view-state';
 import { createViteTestServer, installTestGlobals, runDetailFixture } from './test-support';
 
 type ElkMessage = { data: unknown };
@@ -110,6 +111,30 @@ class MeasuringObserver {
   }
 }
 
+/** Keep the prior measurements while a newly drawn layout waits for ResizeObserver. */
+function delayedMeasurements() {
+  let holding = false;
+  const waiting: (() => void)[] = [];
+  return {
+    Observer: class extends MeasuringObserver {
+      constructor(report: (entries: Measured[]) => void) {
+        super((entries) => {
+          if (holding) waiting.push(() => report(entries));
+          else report(entries);
+        });
+      }
+    },
+    waiting: () => waiting.length,
+    hold() {
+      holding = true;
+    },
+    release() {
+      holding = false;
+      waiting.splice(0).forEach((report) => report());
+    },
+  };
+}
+
 /** The zoom React Flow reads back from the viewport transform when it measures a node. */
 class ScaleMatrix {
   m22: number;
@@ -118,11 +143,21 @@ class ScaleMatrix {
   }
 }
 
-/** An 800 × 600 page where React Flow measures its nodes and ELK lays them out. */
+type CanvasOptions = {
+  root?: GraphNode;
+  readOnly?: boolean;
+  view?: CanvasView;
+  size?: typeof canvas;
+  observer?: typeof MeasuringObserver;
+};
+
+/** A page where React Flow measures its nodes and ELK lays them out. */
 function installCanvasBrowser(
   worker: unknown,
-  frames?: (callback: FrameRequestCallback) => number
+  frames?: (callback: FrameRequestCallback) => number,
+  options: CanvasOptions = {}
 ) {
+  const size = options.size ?? canvas;
   const dom = new JSDOM(
     '<!doctype html><style>.react-flow__pane { z-index: 1; }</style><div id="root"></div>',
     { pretendToBeVisual: true, url: 'https://example.test/' }
@@ -134,18 +169,18 @@ function installCanvasBrowser(
   const px = (value: string, fallback: number) =>
     value.endsWith('px') ? parseFloat(value) : fallback;
   Object.defineProperties(dom.window.HTMLElement.prototype, {
-    clientWidth: { configurable: true, get: () => canvas.width },
-    clientHeight: { configurable: true, get: () => canvas.height },
+    clientWidth: { configurable: true, get: () => size.width },
+    clientHeight: { configurable: true, get: () => size.height },
     offsetWidth: {
       configurable: true,
       get(this: HTMLElement) {
-        return px(this.style.width, canvas.width);
+        return px(this.style.width, size.width);
       },
     },
     offsetHeight: {
       configurable: true,
       get(this: HTMLElement) {
-        return px(this.style.height, canvas.height);
+        return px(this.style.height, size.height);
       },
     },
   });
@@ -160,7 +195,7 @@ function installCanvasBrowser(
     requestAnimationFrame: frames ?? dom.window.requestAnimationFrame.bind(dom.window),
     cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window),
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    ResizeObserver: MeasuringObserver,
+    ResizeObserver: options.observer ?? MeasuringObserver,
     Worker: worker,
     IS_REACT_ACT_ENVIRONMENT: true,
   });
@@ -173,13 +208,14 @@ function installCanvasBrowser(
   };
 }
 
-/** Mounts the run graph from the saved view and waits for its first layout. */
+/** Mounts a canvas from its saved view and waits for the first layout. */
 async function mountRunGraph(
   t: TestContext,
   layouts: ReturnType<typeof layoutWorker>,
-  frames?: (callback: FrameRequestCallback) => number
+  frames?: (callback: FrameRequestCallback) => number,
+  options: CanvasOptions = {}
 ) {
-  const { container, restore } = installCanvasBrowser(layouts.Worker, frames);
+  const { container, restore } = installCanvasBrowser(layouts.Worker, frames, options);
   let unmount = async () => {};
   t.after(async () => {
     await unmount();
@@ -193,7 +229,7 @@ async function mountRunGraph(
   const detail = runDetailFixture();
   const document = {
     name: detail.runId,
-    graph: { ...detail.graph, root },
+    graph: { ...detail.graph, root: options.root ?? root },
     runtime: detail.runtime,
   };
   await act(async () =>
@@ -208,8 +244,8 @@ async function mountRunGraph(
           setPositions: () => {},
           workers: [],
           select: () => {},
-          observation: { key: detail.runId, nodes: {} },
-          view: saved,
+          observation: options.readOnly === false ? undefined : { key: detail.runId, nodes: {} },
+          view: options.view ?? saved,
           inspectorHidden: false,
           showInspector: () => {},
         })
@@ -282,8 +318,8 @@ function drawnBounds(container: HTMLElement) {
   };
 }
 /** The view the canvas fits the whole graph into, with its padding and zoom limits. */
-const fitted = (container: HTMLElement) =>
-  getViewportForBounds(drawnBounds(container), canvas.width, canvas.height, 0.15, 0.9, 0.12);
+const fitted = (container: HTMLElement, size = canvas) =>
+  getViewportForBounds(drawnBounds(container), size.width, size.height, 0.15, 0.9, 0.12);
 const rounded = (view: Viewport) => ({
   x: Math.round(view.x * 10) / 10,
   y: Math.round(view.y * 10) / 10,
@@ -366,3 +402,74 @@ test('fitting the view while an expand is still laying out fits the finished lay
   assert.ok(nodeWith(container, 'Collapse rounds'), 'the group is expanded');
   assert.deepEqual(rounded(viewport(container)), rounded(fitted(container)));
 });
+
+for (const branches of [4, 6]) {
+  for (const width of [1106, 722]) {
+    test(`pending Fit includes ${branches} parallel agents at ${width}px before measurements catch up`, async (t) => {
+      const layouts = layoutWorker();
+      const measurements = delayedMeasurements();
+      const size = { width, height: 644 };
+      const profile: GraphNode = {
+        kind: 'seq',
+        name: 'run',
+        children: [
+          { kind: 'step', name: 'prepare' },
+          {
+            kind: 'loop',
+            name: 'rounds',
+            maxIterations: 2,
+            body: {
+              kind: 'par',
+              name: 'checks',
+              join: { kind: 'all' },
+              branches: Array.from({ length: branches }, (_, index) => ({
+                kind: 'step',
+                name: `writer_${index}`,
+              })),
+            },
+          },
+          { kind: 'succeed', name: 'done', output: { kind: 'null' }, bindings: [] },
+        ],
+      };
+      const container = await mountRunGraph(t, layouts, undefined, {
+        root: profile,
+        readOnly: false,
+        view: { ...saved, collapsed: [] },
+        size,
+        observer: measurements.Observer,
+      });
+      await click(container, 'Collapse rounds');
+      await settle(container);
+
+      layouts.hold();
+      await click(container, 'Expand rounds');
+      assert.equal(layouts.waiting(), 1, 'the expand is laying out');
+      // The temporary expanded nodes have been measured, but ELK has not placed them yet.
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 40)));
+      measurements.hold();
+      await click(container, 'Fit workflow');
+      layouts.release();
+      await settle(container);
+
+      assert.ok(measurements.waiting() > 0, 'the completed layout still has stale measurements');
+      assert.deepEqual(rounded(viewport(container)), rounded(fitted(container, size)));
+      const bounds = drawnBounds(container);
+      const view = viewport(container);
+      const topLeft = onScreen(bounds, view);
+      const bottomRight = onScreen(
+        { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+        view
+      );
+      assert.ok(
+        topLeft.x >= 0 &&
+          topLeft.y >= 0 &&
+          bottomRight.x <= size.width &&
+          bottomRight.y <= size.height
+      );
+
+      await act(async () => measurements.release());
+      await settle(container);
+      assert.deepEqual(rounded(viewport(container)), rounded(fitted(container, size)));
+    });
+  }
+}

@@ -10,6 +10,7 @@ import {
   EdgeLabelRenderer,
   BaseEdge,
   getSmoothStepPath,
+  getViewportForBounds,
   useReactFlow,
   type Node,
   type NodeProps,
@@ -544,6 +545,7 @@ export function WorkflowCanvas(p: {
 }) {
   const { fitView, setCenter, setViewport } = useReactFlow();
   const fitGraph = () => void fitView({ padding: 0.12, maxZoom: 0.9, duration: 180 });
+  const canvasRef = useRef<HTMLDivElement>(null);
   const readOnly = !!p.observation;
   const contextKey = p.observation?.key ?? p.document.name;
   const { collapsed, setCollapsed, initialViewport, moved } = useCanvasView(p, readOnly);
@@ -734,8 +736,15 @@ export function WorkflowCanvas(p: {
     )
   );
   const edges = workflowEdges(projection, boxes, activities, dims, readOnly, p);
-  groups.track([...regions, ...activities]);
-  useEffect(() => groups.settle(fitGraph), [layoutPositions, layoutRegions]);
+  const drawnNodes = [...regions, ...activities];
+  groups.track(drawnNodes);
+  useEffect(
+    () =>
+      groups.settle(() => {
+        if (canvasRef.current) fitRenderedLayout(drawnNodes, canvasRef.current, setViewport);
+      }),
+    [layoutPositions, layoutRegions]
+  );
   const selectedNode = p.inspectorHidden ? undefined : findNode(p.document.graph.root, p.selected);
   return (
     <section
@@ -749,10 +758,10 @@ export function WorkflowCanvas(p: {
         collapseAll={groups.collapseAll}
         arrange={() => void layout(true)}
       />
-      <div className={`flow ${layoutBusy ? 'workflow-arranging' : ''}`}>
+      <div ref={canvasRef} className={`flow ${layoutBusy ? 'workflow-arranging' : ''}`}>
         <ReactFlow
           onMoveEnd={moved}
-          nodes={[...regions, ...activities]}
+          nodes={drawnNodes}
           edges={edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
@@ -811,6 +820,27 @@ export function WorkflowCanvas(p: {
         )}
       </div>
     </section>
+  );
+}
+
+function fitRenderedLayout(
+  nodes: readonly Node[],
+  canvas: HTMLDivElement,
+  setViewport: ReturnType<typeof useReactFlow>['setViewport']
+) {
+  if (!nodes.length) return;
+  // Declared rectangles belong to this layout; measured sizes may still describe the old one.
+  const x = Math.min(...nodes.map((node) => node.position.x));
+  const y = Math.min(...nodes.map((node) => node.position.y));
+  const bounds = {
+    x,
+    y,
+    width: Math.max(...nodes.map((node) => node.position.x + (node.width ?? 0))) - x,
+    height: Math.max(...nodes.map((node) => node.position.y + (node.height ?? 0))) - y,
+  };
+  void setViewport(
+    getViewportForBounds(bounds, canvas.clientWidth, canvas.clientHeight, 0.15, 0.9, 0.12),
+    { duration: 180 }
   );
 }
 
